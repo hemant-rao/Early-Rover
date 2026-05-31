@@ -3,7 +3,14 @@ package com.example.alarm.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,6 +29,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -61,6 +70,26 @@ fun DashboardScreen(
     }
 
     var showQuickAddMenu by remember { mutableStateOf(false) }
+
+    var currentLiveTime by remember { mutableStateOf(java.time.LocalTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            currentLiveTime = java.time.LocalTime.now()
+            kotlinx.coroutines.delay(2000) // update every 2 seconds is incredibly efficient and smooth
+        }
+    }
+
+    // Hardware-accelerated smooth solar system rotation state
+    val infiniteTransition = rememberInfiniteTransition(label = "OrbitRotation")
+    val orbitRotationAngle by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 35000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "OrbitRotationAngle"
+    )
 
     Scaffold(
         modifier = Modifier
@@ -277,12 +306,12 @@ fun DashboardScreen(
                     }
                 }
 
-                // 1. INTERACTIVE 3D CELESTIAL SCENE (Three.js / WebGL)
+                // 1. DYNAMIC ORBIT SPHERE & 3D GL CELESTIAL VIEWER
                 item {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(300.dp)
+                            .height(290.dp)
                             .padding(vertical = 4.dp),
                         contentAlignment = Alignment.Center
                     ) {
@@ -298,15 +327,104 @@ fun DashboardScreen(
                                 )
                         )
 
-                        // Interactive WebGL Three.js scene fills the whole hero area for a true
-                        // 3/4 perspective feel (transparent background blends with the dark theme).
-                        Celestial3DView(
-                            modifier = Modifier.fillMaxSize(),
-                            sunriseTime = sunrise,
-                            sunsetTime = sunset,
-                            activeAlarms = alarms.filter { it.active }.map { Pair(it.hour, it.minute) },
-                            isDark = darkTheme
-                        )
+                        // Orbit track box with live rotating Sun and Moon icons!
+                        val primaryColor = SleekPrimary
+                        Box(
+                            modifier = Modifier.size(240.dp)
+                        ) {
+                            // 1. Orbit dashed line
+                            Canvas(modifier = Modifier.fillMaxSize()) {
+                                drawCircle(
+                                    color = primaryColor.copy(alpha = 0.35f),
+                                    style = Stroke(
+                                        width = 1.dp.toPx(),
+                                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f), 0f)
+                                    )
+                                )
+                            }
+
+                            // Calculate live geometric floats
+                            val liveHourFloat = currentLiveTime.hour + (currentLiveTime.minute / 60.0f) + (currentLiveTime.second / 3600.0f)
+
+                            // Sun position on the 240.dp orbit (radius = 120.dp) + matching rotation state
+                            val sunAngleRad = Math.toRadians(- (liveHourFloat / 24.0 * 360.0) + 90.0 + orbitRotationAngle)
+                            val sunX = (120.0 * Math.cos(sunAngleRad)).toFloat().dp
+                            val sunY = -(120.0 * Math.sin(sunAngleRad)).toFloat().dp
+
+                            // Golden Sun indicator sphere
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .offset(x = sunX, y = sunY)
+                                    .size(28.dp)
+                                    .background(
+                                        Brush.radialGradient(listOf(SleekSolarAccent, Color(0xFFFF9C1A))),
+                                        CircleShape
+                                    )
+                                    .shadow(6.dp, CircleShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.6f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.WbSunny,
+                                    contentDescription = "Real-time Sun position",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+
+                            // Moon position (opposite to sun, offset by 12 hours) + matching rotation state
+                            val moonHourFloat = (liveHourFloat + 12f) % 24f
+                            val moonAngleRad = Math.toRadians(- (moonHourFloat / 24.0 * 360.0) + 90.0 + orbitRotationAngle)
+                            val moonX = (120.0 * Math.cos(moonAngleRad)).toFloat().dp
+                            val moonY = -(120.0 * Math.sin(moonAngleRad)).toFloat().dp
+
+                            // Midnight Purple Indigo Moon indicator sphere
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .offset(x = moonX, y = moonY)
+                                    .size(28.dp)
+                                    .background(
+                                        Brush.radialGradient(listOf(Color(0xFF818CF8), Color(0xFF4F46E5))),
+                                        CircleShape
+                                    )
+                                    .shadow(6.dp, CircleShape)
+                                    .border(1.dp, Color.White.copy(alpha = 0.4f), CircleShape),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.ModeNight,
+                                    contentDescription = "Real-time Moon position",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+
+                        // Central Sphere container matching HTML 3D Mimicry
+                        Box(
+                            modifier = Modifier.size(200.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            // Layer 1: Visual background decoration (with shadow, border, circle shape)
+                            Spacer(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .shadow(12.dp, CircleShape)
+                                    .background(SleekCardBg, CircleShape)
+                                    .border(1.dp, SleekBorder, CircleShape)
+                            )
+
+                            // Layer 2: Interactive WebGL OpenGL view, safely positioned without clipping
+                            Celestial3DView(
+                                modifier = Modifier.fillMaxSize(),
+                                sunriseTime = sunrise,
+                                sunsetTime = sunset,
+                                activeAlarms = alarms.filter { it.active }.map { Pair(it.hour, it.minute) },
+                                isDark = darkTheme
+                            )
+                        }
 
                         // Floating Sunrise Badge (Top Right)
                         Card(
