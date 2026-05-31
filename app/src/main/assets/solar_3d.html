@@ -21,8 +21,8 @@
             background-color: transparent !important;
         }
     </style>
-    <!-- Include highly reliable, performant Three.js r150 from JSDelivr CDN -->
-    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+    <!-- Three.js r150 vendored locally in assets for offline reliability (no network needed) -->
+    <script src="three.min.js"></script>
 </head>
 <body>
     <div id="canvas-container"></div>
@@ -44,6 +44,11 @@
         // Orbit specifications
         const orbitXRadius = 3.6;
         const orbitZRadius = 2.4;
+
+        // Smooth tracker travel: lerp a displayed hour toward the latest time from Kotlin
+        // so the planet glides along the orbit instead of snapping on each 10s update.
+        let targetHour = null;   // most recent currentHour pushed from Android
+        let displayHour = null;  // animated value following targetHour
 
         // Input rotation / zoom tracking
         let isPointerDown = false;
@@ -349,9 +354,18 @@
 
         // MAIN JS INTERFACE BRIDGE API CALLED FROM KOTLIN ALARMVIEWMODEL
         function updateSolarTimes(currentHour, sunriseHour, sunsetHour, isDark) {
-            // Position tracking astronomical planet
-            const currentPos = getOrbitPosition(currentHour);
-            sunMarkerPlanet.position.set(currentPos.x, 0, currentPos.y);
+            // Guard: the scene is only built in init() on window 'load'. Kotlin's onPageFinished
+            // fallback can fire before that, so ignore calls until the meshes exist.
+            if (!sunMarkerPlanet || !orbitLine || !sunriseMarker || !sunsetMarker || !starsField) return;
+
+            // Record the latest time as the target; animate() glides the planet toward it.
+            // On the very first update, snap directly so there is no startup sweep.
+            targetHour = currentHour;
+            if (displayHour === null) {
+                displayHour = currentHour;
+                const startPos = getOrbitPosition(displayHour);
+                sunMarkerPlanet.position.set(startPos.x, 0, startPos.y);
+            }
 
             // Position Sunrise marker
             const risePos = getOrbitPosition(sunriseHour);
@@ -387,6 +401,29 @@
             }
         }
 
+        // Dispose all GPU resources (geometries, materials, renderer) on teardown.
+        // Called from Kotlin (Celestial3DView onRelease) before the WebView is destroyed.
+        function cleanup() {
+            isLoopRunning = false;
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+            if (scene) {
+                scene.traverse((obj) => {
+                    if (obj.geometry) obj.geometry.dispose();
+                    if (obj.material) {
+                        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+                        mats.forEach((m) => m.dispose());
+                    }
+                });
+            }
+            if (renderer) {
+                renderer.dispose();
+                renderer.forceContextLoss();
+            }
+        }
+
         function animate() {
             if (!isLoopRunning) return;
 
@@ -409,16 +446,24 @@
                 sunGlowMesh.scale.set(1 + breathing, 1 + breathing, 1 + breathing);
             }
 
-            // 3. Ambient slow star movement
-            if (starsField) {
-                const posArr = starsField.userData.positions;
-                const speeds = starsField.userData.speeds;
-                
-                // Add soft camera rotation around scene
-                targetRotationY += 0.0006; // continuous elegant glide
+            // 3. Glide the tracker planet along the orbit toward the latest time.
+            if (sunMarkerPlanet && displayHour !== null && targetHour !== null) {
+                // Shortest-path delta on the 24h circle so it never sweeps backwards at midnight.
+                let delta = targetHour - displayHour;
+                if (delta > 12) delta -= 24;
+                else if (delta < -12) delta += 24;
+                displayHour = (displayHour + delta * 0.08 + 24) % 24;
+                const pos = getOrbitPosition(displayHour);
+                sunMarkerPlanet.position.set(pos.x, 0, pos.y);
             }
 
-            // 4. Smooth interpolation (lerp) towards dragging angles
+            // 4. Ambient drift: slowly rotate the star field + gentle camera idle glide
+            if (starsField) {
+                starsField.rotation.y += 0.0002;
+            }
+            targetRotationY += 0.0006; // continuous elegant camera glide (auto-orbit)
+
+            // 5. Smooth interpolation (lerp) towards dragging angles
             currentRotationX += (targetRotationX - currentRotationX) * 0.12;
             currentRotationY += (targetRotationY - currentRotationY) * 0.12;
             cameraZoom += (targetZoom - cameraZoom) * 0.1;
@@ -522,6 +567,7 @@
         // Bind callback references to global scope
         window.updateSolarTimes = updateSolarTimes;
         window.setRenderingEnabled = setRenderingEnabled;
+        window.cleanup = cleanup;
     </script>
 </body>
 </html>

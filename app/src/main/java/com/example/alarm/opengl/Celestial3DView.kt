@@ -105,7 +105,21 @@ fun Celestial3DView(
             WebView(ctx).apply {
                 // Ensure correct transparente styling matches our sleek dark card containers
                 setBackgroundColor(AndroidColor.TRANSPARENT)
-                
+
+                // Claim touch gestures from the enclosing scrollable LazyColumn so drag-to-rotate
+                // and pinch-zoom reach Three.js instead of being consumed as list scrolling.
+                setOnTouchListener { v, event ->
+                    when (event.actionMasked) {
+                        android.view.MotionEvent.ACTION_DOWN,
+                        android.view.MotionEvent.ACTION_MOVE ->
+                            v.parent?.requestDisallowInterceptTouchEvent(true)
+                        android.view.MotionEvent.ACTION_UP,
+                        android.view.MotionEvent.ACTION_CANCEL ->
+                            v.parent?.requestDisallowInterceptTouchEvent(false)
+                    }
+                    false // let the WebView/JS still process the gesture
+                }
+
                 settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
@@ -146,6 +160,8 @@ fun Celestial3DView(
             webViewInstance = webView
         },
         onRelease = { webView ->
+            // Free WebGL geometries/materials/context before tearing down the WebView.
+            webView.evaluateJavascript("if (window.cleanup) window.cleanup();", null)
             webView.stopLoading()
             webView.destroy()
             webViewInstance = null
