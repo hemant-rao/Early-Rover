@@ -17,6 +17,11 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
 
     private val renderer = SolarSystemRenderer()
 
+    /** true -> planets visibly orbit; false -> hold the exact real-time position. */
+    var animateOrbits: Boolean
+        get() = renderer.animateOrbits
+        set(value) { renderer.animateOrbits = value }
+
     private var lastX = 0f
     private var lastY = 0f
     private var lastPinch = 0f

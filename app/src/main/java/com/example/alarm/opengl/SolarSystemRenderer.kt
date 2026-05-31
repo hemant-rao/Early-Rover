@@ -12,6 +12,7 @@ import java.time.LocalDateTime
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.cos
+import kotlin.math.pow
 import kotlin.math.sin
 
 private fun alloc(floats: Int): FloatBuffer =
@@ -20,11 +21,17 @@ private fun alloc(floats: Int): FloatBuffer =
 /**
  * Native OpenGL ES 2.0 renderer for a time-accurate heliocentric solar system.
  *
- * The Sun sits at the origin; each planet is placed at its *real* current
+ * The Sun sits at the origin; each planet starts at its *real* current
  * heliocentric angle (from [SolarEphemeris]) along a screen-compressed orbit ring,
- * so the layout answers "which planet is where, right now". Nothing revolves on its
- * own — positions only change as real time advances (refreshed by the hosting view).
- * A gentle axial spin and a pulsing corona keep the scene alive without faking motion.
+ * so the layout answers "which planet is where, right now".
+ *
+ * Two modes, selected by [animateOrbits]:
+ *  - true  (default): each planet revolves continuously from its real starting angle,
+ *    at a Kepler-correct *relative* speed (inner planets fast, outer slow) compressed
+ *    so every orbit is visible to the eye. This is the "watch them orbit" experience.
+ *  - false: positions only change as real time advances (refreshed by the hosting view) —
+ *    scientifically accurate but imperceptible minute-to-minute.
+ * In both modes a gentle axial spin and a pulsing corona keep the scene alive.
  */
 class SolarSystemRenderer : GLSurfaceView.Renderer {
 
@@ -32,6 +39,12 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
     @Volatile var yaw = 0.6f          // radians, drag horizontally
     @Volatile var pitch = -0.55f      // radians, drag vertically (looking down a bit)
     @Volatile var distance = 17f      // zoom (pinch)
+
+    /**
+     * true  -> planets visibly orbit from their real starting positions (animated).
+     * false -> planets stay at the exact real-time position (accurate, near-static).
+     */
+    @Volatile var animateOrbits = true
 
     /** Refreshed by the view when the clock advances; angles in radians. */
     @Volatile private var bodyAngles = FloatArray(PLANETS.size) { 0f }
@@ -143,7 +156,9 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
         // --- planets ---
         for (i in PLANETS.indices) {
             val p = PLANETS[i]
-            val ang = angles[i]
+            // Start at the real heliocentric angle; in animated mode revolve onward from
+            // there at a Kepler-correct (compressed) speed so the orbit is visible.
+            val ang = if (animateOrbits) angles[i] + t * orbitOmega(p) else angles[i]
             val x = p.orbit * cos(ang)
             val z = p.orbit * sin(ang)
 
@@ -159,6 +174,21 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
                 drawSaturnRing(x, z, t)
             }
         }
+    }
+
+    /**
+     * Angular speed (rad/s of wall-clock) for the animated orbit of [p].
+     *
+     * Real orbital periods span Mercury (88 d) to Neptune (60 000 d) — a 684× range,
+     * far too wide to watch. We keep Earth at one revolution per [EARTH_REVOLUTION_SECONDS]
+     * and scale the rest by (Earth period / planet period) raised to [SPEED_COMPRESS],
+     * which preserves the true ordering (inner faster than outer) while squeezing the
+     * range so even Neptune visibly drifts.
+     */
+    private fun orbitOmega(p: Planet): Float {
+        val baseOmega = (2.0 * Math.PI / EARTH_REVOLUTION_SECONDS).toFloat()
+        val ratio = (EARTH_PERIOD_DAYS / p.periodDays).pow(SPEED_COMPRESS)
+        return baseOmega * ratio
     }
 
     // ---------------------------------------------------------------- drawing
@@ -397,22 +427,29 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
 
     data class Planet(
         val name: String, val orbit: Float, val size: Float,
-        val color: FloatArray, val spin: Float, val tilt: Float
+        val color: FloatArray, val spin: Float, val tilt: Float,
+        /** Real sidereal orbital period in days — drives the animated revolution speed. */
+        val periodDays: Float
     )
 
     companion object {
         private const val SUN_RADIUS = 0.95f
 
+        // ----- animated-orbit tuning -----
+        private const val EARTH_REVOLUTION_SECONDS = 60f  // Earth = 1 orbit per 60 s
+        private const val EARTH_PERIOD_DAYS = 365.256f
+        private const val SPEED_COMPRESS = 0.62f          // 0 = all equal, 1 = true Kepler
+
         // Order MUST match SolarEphemeris.compute() planet order (after the Sun).
         val PLANETS = listOf(
-            Planet("Mercury", 1.7f, 0.10f, floatArrayOf(0.62f, 0.60f, 0.58f), 24f, 0.1f),
-            Planet("Venus", 2.4f, 0.16f, floatArrayOf(0.90f, 0.72f, 0.40f), 16f, 2.6f),
-            Planet("Earth", 3.2f, 0.17f, floatArrayOf(0.27f, 0.52f, 0.90f), 40f, 23.4f),
-            Planet("Mars", 4.1f, 0.13f, floatArrayOf(0.82f, 0.40f, 0.27f), 38f, 25f),
-            Planet("Jupiter", 5.3f, 0.42f, floatArrayOf(0.80f, 0.66f, 0.50f), 70f, 3f),
-            Planet("Saturn", 6.4f, 0.36f, floatArrayOf(0.86f, 0.76f, 0.55f), 65f, 26f),
-            Planet("Uranus", 7.3f, 0.26f, floatArrayOf(0.55f, 0.80f, 0.84f), 50f, 82f),
-            Planet("Neptune", 8.1f, 0.25f, floatArrayOf(0.30f, 0.45f, 0.85f), 48f, 28f)
+            Planet("Mercury", 1.7f, 0.10f, floatArrayOf(0.62f, 0.60f, 0.58f), 24f, 0.1f, 87.969f),
+            Planet("Venus", 2.4f, 0.16f, floatArrayOf(0.90f, 0.72f, 0.40f), 16f, 2.6f, 224.701f),
+            Planet("Earth", 3.2f, 0.17f, floatArrayOf(0.27f, 0.52f, 0.90f), 40f, 23.4f, 365.256f),
+            Planet("Mars", 4.1f, 0.13f, floatArrayOf(0.82f, 0.40f, 0.27f), 38f, 25f, 686.980f),
+            Planet("Jupiter", 5.3f, 0.42f, floatArrayOf(0.80f, 0.66f, 0.50f), 70f, 3f, 4332.59f),
+            Planet("Saturn", 6.4f, 0.36f, floatArrayOf(0.86f, 0.76f, 0.55f), 65f, 26f, 10759.22f),
+            Planet("Uranus", 7.3f, 0.26f, floatArrayOf(0.55f, 0.80f, 0.84f), 50f, 82f, 30688.5f),
+            Planet("Neptune", 8.1f, 0.25f, floatArrayOf(0.30f, 0.45f, 0.85f), 48f, 28f, 60182.0f)
         )
 
         // ---- shaders (GLSL ES 1.00) ----

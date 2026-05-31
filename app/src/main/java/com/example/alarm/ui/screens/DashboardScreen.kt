@@ -321,7 +321,10 @@ fun DashboardScreen(
                                 sunriseTime = sunrise,
                                 sunsetTime = sunset,
                                 activeAlarms = alarms.filter { it.active }.map { Pair(it.hour, it.minute) },
-                                isDark = darkTheme
+                                isDark = darkTheme,
+                                // true = planets visibly orbit (starting from real positions);
+                                // set false for scientifically static real-time positions.
+                                animateOrbits = true
                             )
                         }
 

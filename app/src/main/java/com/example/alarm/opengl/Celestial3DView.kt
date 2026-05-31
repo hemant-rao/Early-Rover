@@ -28,14 +28,17 @@ fun Celestial3DView(
     sunriseTime: LocalTime = LocalTime.of(6, 0),
     sunsetTime: LocalTime = LocalTime.of(18, 0),
     activeAlarms: List<Pair<Int, Int>> = emptyList(),
-    isDark: Boolean = isSystemInDarkTheme()
+    isDark: Boolean = isSystemInDarkTheme(),
+    /** true -> planets visibly orbit the Sun; false -> hold exact real-time positions. */
+    animateOrbits: Boolean = true
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     var glView by remember { mutableStateOf<SolarSystemGLView?>(null) }
 
     AndroidView(
         modifier = modifier.fillMaxSize(),
-        factory = { ctx -> SolarSystemGLView(ctx).also { glView = it } }
+        factory = { ctx -> SolarSystemGLView(ctx).also { it.animateOrbits = animateOrbits; glView = it } },
+        update = { it.animateOrbits = animateOrbits }
     )
 
     DisposableEffect(lifecycleOwner) {
