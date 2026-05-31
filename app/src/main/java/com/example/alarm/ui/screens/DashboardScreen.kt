@@ -102,12 +102,10 @@ fun DashboardScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .height(72.dp)
                     .background(SleekCardBg, shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
                     .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                    // Reserve the system navigation-bar space BELOW the bar so the 72.dp of
-                    // tappable content always sits above the system buttons (edge-to-edge safe).
                     .windowInsetsPadding(WindowInsets.navigationBars)
-                    .height(72.dp)
                     .testTag("sleek_bottom_nav_bar")
             ) {
                 // Layout row for tabs with equal weights
