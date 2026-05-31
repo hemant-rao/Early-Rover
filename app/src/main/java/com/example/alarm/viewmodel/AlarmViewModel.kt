@@ -14,6 +14,8 @@ import com.example.alarm.location.CityInfo
 import com.example.alarm.location.LocationHelper
 import com.example.alarm.scheduling.AlarmScheduler
 import com.example.alarm.scheduling.AlarmService
+import com.example.alarm.weather.WeatherInfo
+import com.example.alarm.weather.WeatherRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -63,6 +65,10 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _tomorrowSunsetTime = MutableStateFlow(LocalTime.of(18, 0))
     val tomorrowSunsetTime: StateFlow<LocalTime> = _tomorrowSunsetTime.asStateFlow()
+
+    // Current location weather (drives the animated dashboard background)
+    private val _weather = MutableStateFlow<WeatherInfo?>(null)
+    val weather: StateFlow<WeatherInfo?> = _weather.asStateFlow()
 
     // Upcoming Hero alarm info
     private val _nextUpcomingAlarm = MutableStateFlow<Alarm?>(null)
@@ -178,6 +184,17 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         observeAlarmsForUpcoming()
     }
 
+    fun refreshWeather() {
+        val lat = _latitude.value
+        val lng = _longitude.value
+        viewModelScope.launch(Dispatchers.IO) {
+            val info = WeatherRepository.fetchCurrent(lat, lng)
+            if (info != null) {
+                _weather.value = info
+            }
+        }
+    }
+
     private fun recomputeSunTimes() {
         val lat = _latitude.value
         val lng = _longitude.value
@@ -195,6 +212,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
         // Whenever sunrise/sunset recalibrates, we dynamically rewrite daylight event hours in DB for active alarms
         recalculateAndScheduleActiveAlarms()
+
+        // Location changed (or first launch) -> refresh the weather backdrop for the new coordinates.
+        refreshWeather()
     }
 
     private fun observeAlarmsForUpcoming() {
