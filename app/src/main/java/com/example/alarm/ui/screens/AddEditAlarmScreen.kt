@@ -1,0 +1,659 @@
+package com.example.alarm.ui.screens
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.alarm.data.Alarm
+import com.example.alarm.viewmodel.AlarmViewModel
+import com.example.ui.theme.*
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AddEditAlarmScreen(
+    viewModel: AlarmViewModel,
+    alarmId: Int?, // if null, adding. if non-null, editing.
+    onNavigateBack: () -> Unit
+) {
+    val editingState by viewModel.editingAlarm.collectAsState()
+    val allAlarms by viewModel.allAlarms.collectAsState()
+
+    // Initialize scratchpad from Database if editing
+    LaunchedEffect(alarmId) {
+        if (alarmId != null) {
+            val existing = allAlarms.find { it.id == alarmId }
+            if (existing != null) {
+                viewModel.editingAlarm.value = existing
+            } else {
+                viewModel.startNewAlarmScratchpad("CUSTOM")
+            }
+        }
+        // If scratchpad is empty for some reason, guarantee initialization
+        if (viewModel.editingAlarm.value == null) {
+            viewModel.startNewAlarmScratchpad("CUSTOM")
+        }
+    }
+
+    val alarm = editingState ?: return
+
+    Scaffold(
+        modifier = Modifier
+            .fillMaxSize()
+            .testTag("add_edit_alarm_screen"),
+        containerColor = SleekBackground,
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = if (alarmId == null) viewModel.translate("Schedule Alarm") else viewModel.translate("Edit Alarm"),
+                        fontWeight = FontWeight.Bold,
+                        color = SleekActiveText
+                    )
+                },
+                navigationIcon = {
+                    IconButton(
+                        onClick = onNavigateBack,
+                        modifier = Modifier.testTag("alarm_back_button")
+                    ) {
+                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = viewModel.translate("Go back"), tint = SleekActiveText)
+                    }
+                },
+                actions = {
+                    if (alarmId != null) {
+                        IconButton(
+                            onClick = {
+                                viewModel.deleteAlarm(alarm)
+                                onNavigateBack()
+                            },
+                            modifier = Modifier.testTag("delete_alarm_action")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Delete,
+                                contentDescription = viewModel.translate("Delete"),
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.Transparent
+                )
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp)
+        ) {
+            
+            // 1. CHOOSE ALARM TYPE HEADER (SLEEK CUSTOM CARD)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(24.dp)),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = SleekCardBg)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val (icon, tint, label, desc) = when (alarm.alarmType) {
+                        "SUNRISE" -> Quad(Icons.Default.WbSunny, SleekSolarAccent, viewModel.translate("Sunrise Alarm"), viewModel.translate("Fires relative to today's local sunrise."))
+                        "SUNSET" -> Quad(Icons.Default.WbTwilight, SleekSecondary, viewModel.translate("Sunset Alarm"), viewModel.translate("Fires relative to today's local sunset."))
+                        else -> Quad(Icons.Default.AccessTime, SleekPrimary, viewModel.translate("Standard Clock Alarm"), viewModel.translate("Fires at an exact manually set clock time."))
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .background(tint.copy(alpha = 0.15f), CircleShape)
+                            .border(BorderStroke(1.dp, tint.copy(alpha = 0.3f)), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
+                    }
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Column {
+                        Text(
+                            text = label,
+                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = SleekActiveText
+                        )
+                        Text(
+                            text = desc,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SleekMutedText
+                        )
+                    }
+                }
+            }
+
+            // 2. TIME SELECTOR OR EVENT OFFSET SELECTOR
+            if (alarm.alarmType == "CUSTOM") {
+                Text(
+                    text = viewModel.translate("Configure Clock Time"),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = SleekSecondary,
+                    letterSpacing = 1.sp
+                )
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(24.dp)),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = SleekCardBg)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(24.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        MiStyleTimeWheelSelector(
+                            value = alarm.hour,
+                            limit = 24,
+                            label = viewModel.translate("Hour"),
+                            onValueChange = { h ->
+                                viewModel.editingAlarm.value = alarm.copy(hour = h)
+                            }
+                        )
+                        
+                        Text(
+                            text = ":",
+                            fontSize = 44.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SleekSecondary,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+
+                        MiStyleTimeWheelSelector(
+                            value = alarm.minute,
+                            limit = 60,
+                            label = viewModel.translate("Minute"),
+                            onValueChange = { m ->
+                                viewModel.editingAlarm.value = alarm.copy(minute = m)
+                            }
+                        )
+                    }
+                }
+            } else {
+                Text(
+                    text = viewModel.translate("Trigger Offset"),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = SleekSecondary,
+                    letterSpacing = 1.sp
+                )
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(24.dp)),
+                    shape = RoundedCornerShape(24.dp),
+                    colors = CardDefaults.cardColors(containerColor = SleekCardBg)
+                ) {
+                    Column(modifier = Modifier.padding(20.dp)) {
+                        
+                        // User Request Checkbox: Trigger Exactly during natural event
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable {
+                                    val checked = alarm.offsetMinutes != 0
+                                    viewModel.editingAlarm.value = if (checked) {
+                                        alarm.copy(offsetMinutes = 0)
+                                    } else {
+                                        alarm.copy(offsetMinutes = -15) // default back to 15m before
+                                    }
+                                }
+                                .padding(vertical = 8.dp)
+                        ) {
+                            Checkbox(
+                                checked = alarm.offsetMinutes == 0,
+                                onCheckedChange = { checked ->
+                                    viewModel.editingAlarm.value = if (checked) {
+                                        alarm.copy(offsetMinutes = 0)
+                                    } else {
+                                        alarm.copy(offsetMinutes = -15)
+                                    }
+                                },
+                                colors = CheckboxDefaults.colors(checkedColor = SleekPrimary)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = viewModel.translate("Trigger exactly during event (Sunrise/Sunset)"),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = SleekActiveText
+                                )
+                                Text(
+                                    text = viewModel.translate("Fires at the precise moment of astronomical rise/set"),
+                                    fontSize = 12.sp,
+                                    color = SleekMutedText
+                                )
+                            }
+                        }
+
+                        if (alarm.offsetMinutes != 0) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = viewModel.translate("Fires weekly during selected days"),
+                                fontSize = 13.sp,
+                                color = SleekMutedText
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+
+                            // Offset choices
+                            val offsets = listOf(-30, -15, -10, -5, 5, 10, 15, 30)
+                            
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                offsets.forEach { offset ->
+                                    val selected = alarm.offsetMinutes == offset
+                                    val labelText = when {
+                                        offset < 0 -> "${-offset}m ${viewModel.translate("Before")}"
+                                        offset > 0 -> "${offset}m ${viewModel.translate("After")}"
+                                        else -> viewModel.translate("At Event")
+                                    }
+                                    
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .background(
+                                                if (selected) SleekPrimary else SleekBorder.copy(alpha = 0.5f)
+                                            )
+                                            .clickable {
+                                                viewModel.editingAlarm.value = alarm.copy(offsetMinutes = offset)
+                                            }
+                                            .border(
+                                                BorderStroke(
+                                                    width = 1.dp,
+                                                    color = if (selected) SleekSecondary else Color.Transparent
+                                                ),
+                                                shape = RoundedCornerShape(12.dp)
+                                            )
+                                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                                    ) {
+                                        Text(
+                                            text = labelText,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (selected) Color.White else SleekMutedText
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        // Text summary representation
+                        val hour12 = if (alarm.hour % 12 == 0) 12 else alarm.hour % 12
+                        val ampm = if (alarm.hour >= 12) viewModel.translate("PM") else viewModel.translate("AM")
+                        val timeStr = String.format("%02d:%02d %s", hour12, alarm.minute, ampm)
+                        Text(
+                            text = "${viewModel.translate("Based on location, triggers today at")} $timeStr",
+                            fontSize = 12.sp,
+                            color = SleekSolarAccent,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            // 3. REPEAT SCHEDULE DAYS SELECTOR
+            Text(
+                text = viewModel.translate("Repeat Days"),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = SleekSecondary,
+                letterSpacing = 1.sp
+            )
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(24.dp)),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = SleekCardBg)
+            ) {
+                Column(modifier = Modifier.padding(20.dp)) {
+                    Text(
+                        text = viewModel.translate("Fires weekly during selected days"),
+                        fontSize = 13.sp,
+                        color = SleekMutedText
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    val activeDays = alarm.getRepeatDaysList()
+                    val daysOfWeek = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        for (i in 1..7) {
+                            val active = activeDays.contains(i)
+                            Box(
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (active) SleekPrimary else SleekBorder.copy(alpha = 0.5f)
+                                    )
+                                    .clickable {
+                                        val newList = if (active) {
+                                            activeDays.filter { it != i }
+                                        } else {
+                                            activeDays + i
+                                        }
+                                        viewModel.editingAlarm.value = alarm.copy(
+                                            repeatDays = newList.sorted().joinToString(",")
+                                        )
+                                    }
+                                    .border(
+                                        BorderStroke(
+                                            width = 1.dp,
+                                            color = if (active) SleekSecondary else Color.Transparent
+                                        ),
+                                        shape = CircleShape
+                                    )
+                                    .testTag("day_selector_$i"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = daysOfWeek[i - 1].substring(0, 1),
+                                    color = if (active) Color.White else SleekMutedText,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. CUSTOM LABEL INPUT
+            Text(
+                text = viewModel.translate("Alarm Identifier"),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = SleekSecondary,
+                letterSpacing = 1.sp
+            )
+
+            OutlinedTextField(
+                value = alarm.title,
+                onValueChange = { text ->
+                    viewModel.editingAlarm.value = alarm.copy(title = text)
+                },
+                placeholder = { Text(viewModel.translate("e.g. Sunrise Tracker, Yoga Call..."), color = SleekMutedText, fontSize = 14.sp) },
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = SleekActiveText,
+                    unfocusedTextColor = SleekActiveText,
+                    focusedBorderColor = SleekPrimary,
+                    unfocusedBorderColor = SleekBorder,
+                    focusedContainerColor = SleekCardBg,
+                    unfocusedContainerColor = SleekCardBg,
+                    focusedLeadingIconColor = SleekPrimary,
+                    unfocusedLeadingIconColor = SleekMutedText
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("alarm_label_input"),
+                shape = RoundedCornerShape(16.dp),
+                maxLines = 1,
+                leadingIcon = { Icon(Icons.Default.Label, contentDescription = null, modifier = Modifier.size(18.dp)) }
+            )
+
+            // 5. SMART CONTROLS CARD
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(24.dp)),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = SleekCardBg)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(viewModel.translate("Vibration"), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = SleekActiveText)
+                            Text(viewModel.translate("Vibrate during alarm trigger sequence"), fontSize = 12.sp, color = SleekMutedText)
+                        }
+                        Switch(
+                            checked = alarm.vibrationEnabled,
+                            onCheckedChange = { v ->
+                                viewModel.editingAlarm.value = alarm.copy(vibrationEnabled = v)
+                            },
+                            modifier = Modifier.testTag("vibration_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = SleekPrimary,
+                                uncheckedThumbColor = Color.Gray,
+                                uncheckedTrackColor = SleekBorder
+                            )
+                        )
+                    }
+
+                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(SleekBorder.copy(alpha = 0.5f)))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(viewModel.translate("Snooze Awake"), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = SleekActiveText)
+                            Text("${viewModel.translate("Snooze pause duration")}: ${alarm.snoozeMinutes} ${viewModel.translate("mins")}", fontSize = 12.sp, color = SleekMutedText)
+                        }
+                        Switch(
+                            checked = alarm.snoozeEnabled,
+                            onCheckedChange = { s ->
+                                viewModel.editingAlarm.value = alarm.copy(snoozeEnabled = s)
+                            },
+                            modifier = Modifier.testTag("snooze_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = SleekPrimary,
+                                uncheckedThumbColor = Color.Gray,
+                                uncheckedTrackColor = SleekBorder
+                            )
+                        )
+                    }
+
+                    if (alarm.snoozeEnabled) {
+                        Slider(
+                            value = alarm.snoozeMinutes.toFloat(),
+                            onValueChange = { value ->
+                                viewModel.editingAlarm.value = alarm.copy(snoozeMinutes = value.toInt())
+                            },
+                            valueRange = 1f..30f,
+                            steps = 30,
+                            modifier = Modifier.testTag("snooze_slider"),
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = SleekPrimary,
+                                inactiveTrackColor = SleekBorder
+                            )
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // 6. SAVE ACTION BUTTON WITH PREMIUM HORIZONTAL GRADIENT
+            Button(
+                onClick = {
+                    viewModel.saveEditingAlarm()
+                    onNavigateBack()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+                    .shadow(12.dp, RoundedCornerShape(16.dp))
+                    .testTag("save_alarm_button"),
+                shape = RoundedCornerShape(16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Brush.horizontalGradient(listOf(SleekPrimary, SleekSecondary))),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(imageVector = Icons.Default.Check, contentDescription = viewModel.translate("Save"), tint = Color.White)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = viewModel.translate("Confirm Schedule Settings"),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Xiaomi / Premium MI Style Wheel Selector Component
+@Composable
+fun MiStyleTimeWheelSelector(
+    value: Int,
+    limit: Int,
+    label: String,
+    onValueChange: (Int) -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.width(90.dp)
+    ) {
+        Text(
+            text = label.uppercase(),
+            fontSize = 11.sp,
+            color = SleekSecondary,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp
+        )
+        
+        Spacer(modifier = Modifier.height(8.dp))
+        
+        val previousVal = (value - 1 + limit) % limit
+        val nextVal = (value + 1) % limit
+        
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(16.dp))
+                .background(SleekCardBg, shape = RoundedCornerShape(16.dp))
+                .padding(vertical = 12.dp, horizontal = 16.dp)
+        ) {
+            // Level 1: Previous (Click to scroll up / decrement)
+            Text(
+                text = String.format("%02d", previousVal),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Medium,
+                color = SleekMutedText.copy(alpha = 0.4f),
+                modifier = Modifier
+                    .clickable { onValueChange(previousVal) }
+                    .padding(vertical = 4.dp)
+            )
+            
+            // Middle Separator Line
+            Box(
+                modifier = Modifier
+                    .width(40.dp)
+                    .height(1.dp)
+                    .background(SleekPrimary.copy(alpha = 0.2f))
+            )
+            
+            // Level 2: Selected (Large Bold)
+            Box(
+                modifier = Modifier
+                    .background(SleekPrimary.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = String.format("%02d", value),
+                    fontSize = 32.sp,
+                    fontWeight = FontWeight.Black,
+                    color = SleekPrimary
+                )
+            }
+            
+            // Middle Separator Line
+            Box(
+                modifier = Modifier
+                    .width(40.dp)
+                    .height(1.dp)
+                    .background(SleekPrimary.copy(alpha = 0.2f))
+            )
+            
+            // Level 3: Next (Click to scroll down / increment)
+            Text(
+                text = String.format("%02d", nextVal),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Medium,
+                color = SleekMutedText.copy(alpha = 0.4f),
+                modifier = Modifier
+                    .clickable { onValueChange(nextVal) }
+                    .padding(vertical = 4.dp)
+            )
+        }
+    }
+}
+
+data class Quad<T1, T2, T3, T4>(val first: T1, val second: T2, val third: T3, val fourth: T4)
