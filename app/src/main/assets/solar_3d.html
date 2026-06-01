@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Solaris Interactive 3D Orbit</title>
+    <style>
+        body, html {
+            background-color: transparent !important;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            background-color: transparent !important;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+        /* Crafting an elegant, modern fallback style in case ThreeJS is offline or unavailable */
+        #fallback-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            background-color: transparent !important;
+            z-index: 2;
+        }
+        .fallback-orbit {
+            position: relative;
+            width: 160px;
+            height: 160px;
+            border: 1px dashed rgba(74, 144, 250, 0.35);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .fallback-sun {
+            width: 60px;
+            height: 60px;
+            background: radial-gradient(circle, #FFE17D 0%, #FF9C1A 50%, #FF6B35 100%);
+            border-radius: 50%;
+            box-shadow: 0 0 24px rgba(255, 156, 26, 0.6);
+            animation: pulse-glow 3s infinite ease-in-out;
+        }
+        .fallback-marker {
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            background: linear-gradient(135deg, #8B9DFF 0%, #7A66F9 100%);
+            border-radius: 50%;
+            border: 2px solid #FFFFFF;
+            box-shadow: 0 0 8px rgba(139, 157, 255, 0.8);
+            transform-origin: 50% 50%;
+            top: -7px;
+            left: calc(50% - 7px);
+        }
+        @keyframes pulse-glow {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 20px rgba(255, 156, 26, 0.5); }
+            50% { transform: scale(1.06); box-shadow: 0 0 32px rgba(255, 156, 26, 0.8); }
+        }
+    </style>
+    <!-- Include highly reliable Three.js r150 from JSDelivr CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.0/build/three.min.js"></script>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="fallback-container">
+        <div class="fallback-orbit">
+            <div class="fallback-sun"></div>
+            <div id="fallback-marker" class="fallback-marker"></div>
+        </div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, animationFrameId;
+        let isLoopRunning = true;
+        let threeJsLoaded = false;
+
+        // Visual nodes
+        let sunMesh, sunGlowMesh, orbitLine;
+        let sunMarkerPlanet, sunriseMarker, sunsetMarker;
+        let starsField;
+
+        // Coordinates & States
+        let currentHourCached = 12.0;
+        let sunriseHourCached = 6.0;
+        let sunsetHourCached = 18.0;
+        let isDarkCached = true;
+
+        // Custom Plasma Shader Uniforms
+        let uTime = 0;
+        const clock = typeof THREE !== 'undefined' ? new THREE.Clock() : null;
+
+        // Orbit specs
+        const orbitXRadius = 3.6;
+        const orbitZRadius = 2.4;
+
+        // Input rotation / zoom tracking
+        let isTouching = false;
+        let lastTouchX = 0, lastTouchY = 0;
+        let targetRotationX = 0.35; // base 3/4 perspective tilt
+        let targetRotationY = -0.4; // slight side layout start
+        let currentRotationX = 0.35;
+        let currentRotationY = -0.4;
+        let cameraZoom = 4.8;
+        let targetZoom = 4.8;
+        let initialDistance = 0;
+
+        // 3D Solar Plasma shader program - procedural moving solar flare fields
+        const plasmaVertexShader = `
+            varying vec2 vUv;
+            varying vec3 vNormal;
+            varying vec3 vPosition;
+            void main() {
+                vUv = uv;
+                vNormal = normalize(normalMatrix * normal);
+                vPosition = position;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `;
+
+        const plasmaFragmentShader = `
+            uniform float uTime;
+            varying vec2 vUv;
+            varying vec3 vNormal;
+            varying vec3 vPosition;
+
+            vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x, 289.0);}
+            vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
+
+            float snoise(vec3 v){
+                const vec2 C = vec2(1.0/6.0, 1.0/3.0);
+                const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+
+                vec3 i  = floor(v + dot(v, C.yyy));
+                vec3 x0 = v - i + dot(i, C.xxx);
+
+                vec3 g = step(x0.yzx, x0.xyz);
+                vec3 l = 1.0 - g;
+                vec3 i1 = min(g.xyz, l.zxy);
+                vec3 i2 = max(g.xyz, l.zxy);
+
+                vec3 x1 = x0 - i1 + 1.0 * C.xxx;
+                vec3 x2 = x0 - i2 + 2.0 * C.xxx;
+                vec3 x3 = x0 - D.yyy;
+
+                i = mod(i, 289.0);
+                vec4 p = permute(permute(permute(
+                            i.z + vec4(0.0, i1.z, i2.z, 1.0))
+                        + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+                        + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+
+                float n_ = 0.142857142857;
+                vec3 ns = n_ * D.wyz - D.xzx;
+
+                vec4 j = p - 49.0 * floor(p * ns.z *ns.z);
+
+                vec4 x_ = floor(j * ns.z);
+                vec4 y_ = floor(j - 7.0 * x_);
+
+                vec4 x = x_ *ns.x + ns.yyyy;
+                vec4 y = y_ *ns.x + ns.yyyy;
+                vec4 h = 1.0 - abs(x) - abs(y);
+
+                vec4 b0 = vec4(x.xy, y.xy);
+                vec4 b1 = vec4(x.zw, y.zw);
+
+                vec4 s0 = floor(b0)*2.0 + 1.0;
+                vec4 s1 = floor(b1)*2.0 + 1.0;
+                vec4 sh = -step(h, vec4(0.0));
+
+                vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
+                vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
+
+                vec3 p0 = vec3(a0.xy, h.x);
+                vec3 p1 = vec3(a0.zw, h.y);
+                vec3 p2 = vec3(a1.xy, h.z);
+                vec3 p3 = vec3(a1.zw, h.w);
+
+                vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2, p2), dot(p3,p3)));
+                p0 *= norm.x;
+                p1 *= norm.y;
+                p2 *= norm.z;
+                p3 *= norm.w;
+
+                vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+                m = m * m;
+                return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+            }
+
+            void main() {
+                float n1 = snoise(vPosition * 1.8 + vec3(0.0, 0.0, uTime * 0.35));
+                float n2 = snoise(vPosition * 3.5 + vec3(0.0, uTime * 0.5, 0.0)) * 0.5;
+                float combinedNoise = (n1 + n2 + 1.5) / 3.0;
+
+                vec3 crimsonRed = vec3(0.9, 0.18, 0.0);
+                vec3 richGold = vec3(1.0, 0.58, 0.0);
+                vec3 coreYellow = vec3(1.0, 0.96, 0.52);
+
+                vec3 plasmaColor = mix(crimsonRed, richGold, combinedNoise);
+                plasmaColor = mix(plasmaColor, coreYellow, pow(combinedNoise, 2.2));
+
+                float edgeGlow = pow(1.0 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 2.2);
+                plasmaColor += coreYellow * edgeGlow * 0.8;
+
+                gl_FragColor = vec4(plasmaColor, 1.0);
+            }
+        `;
+
+        function init() {
+            // Check if Three.JS was loaded successfully
+            if (typeof THREE === 'undefined') {
+                console.warn("ThreeJS failed to load or is not accessible offline. Activating elegant 2D fallback layout.");
+                document.getElementById('canvas-container').style.display = 'none';
+                document.getElementById('fallback-container').style.display = 'flex';
+                updateFallbackLayout();
+                
+                // Alert Kotlin that we are loaded and ready in fallback mode
+                if (window.SolarJSBridge && window.SolarJSBridge.onHtmlReady) {
+                    window.SolarJSBridge.onHtmlReady();
+                }
+                return;
+            }
+
+            threeJsLoaded = true;
+            const container = document.getElementById('canvas-container');
+            const viewWidth = container.clientWidth || window.innerWidth || 200;
+            const viewHeight = container.clientHeight || window.innerHeight || 200;
+
+            // 1. Setup Scene, transparent background
+            scene = new THREE.Scene();
+
+            // 2. Tilted Perspective Camera
+            camera = new THREE.PerspectiveCamera(45, viewWidth / viewHeight, 0.1, 100);
+            updateCameraPosition();
+
+            // 3. WebGL Renderer with Alpha compatibility
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
+            renderer.setSize(viewWidth, viewHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); // capped to 2 for performance
+            renderer.setClearColor(0x000000, 0); // fully transparent
+            container.appendChild(renderer.domElement);
+
+            // 4. Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.35);
+            scene.add(ambientLight);
+
+            const solarDirectional = new THREE.DirectionalLight(0xfffaed, 1.2);
+            solarDirectional.position.set(5, 5, 5);
+            scene.add(solarDirectional);
+
+            // 5. SUN BULB: Custom Shaded Solar Sphere
+            const sunGeo = new THREE.SphereGeometry(0.85, 32, 32);
+            const sunMat = new THREE.ShaderMaterial({
+                vertexShader: plasmaVertexShader,
+                fragmentShader: plasmaFragmentShader,
+                uniforms: {
+                    uTime: { value: 0 }
+                }
+            });
+            sunMesh = new THREE.Mesh(sunGeo, sunMat);
+            scene.add(sunMesh);
+
+            // 5b. SUN GLOW EXTENSION: Additive Atmosphere Halo
+            const glowGeo = new THREE.SphereGeometry(1.22, 32, 32);
+            const glowMat = new THREE.ShaderMaterial({
+                vertexShader: `
+                    varying vec3 vNormal;
+                    void main() {
+                        vNormal = normalize(normalMatrix * normal);
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    varying vec3 vNormal;
+                    void main() {
+                        float intensity = pow(0.68 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 2.5);
+                        gl_FragColor = vec4(1.0, 0.55, 0.1, 1.0) * intensity;
+                    }
+                `,
+                blending: THREE.AdditiveBlending,
+                side: THREE.BackSide,
+                transparent: true
+            });
+            sunGlowMesh = new THREE.Mesh(glowGeo, glowMat);
+            scene.add(sunGlowMesh);
+
+            // 6. RING ELLIPTICAL ORBIT: Soft neon trajectory ribbon
+            const orbitPoints = [];
+            const divisions = 120;
+            for (let i = 0; i <= divisions; i++) {
+                const angle = (i / divisions) * Math.PI * 2;
+                orbitPoints.push(new THREE.Vector3(
+                    orbitXRadius * Math.cos(angle),
+                    0,
+                    orbitZRadius * Math.sin(angle)
+                ));
+            }
+            const orbitGeo = new THREE.BufferGeometry().setFromPoints(orbitPoints);
+            const orbitMat = new THREE.LineBasicMaterial({
+                color: 0x4A90FA, // Solari Sky Blue
+                transparent: true,
+                opacity: 0.45,
+                linewidth: 2.0
+            });
+            orbitLine = new THREE.Line(orbitGeo, orbitMat);
+            scene.add(orbitLine);
+
+            // 7. ASTRONOMICAL SENSORY MARKERS
+            // A: Sunrise Core Point (Solar Orange)
+            const sunriseGeo = new THREE.SphereGeometry(0.16, 16, 16);
+            const sunriseMat = new THREE.MeshBasicMaterial({ color: 0xFF6B35 });
+            sunriseMarker = new THREE.Mesh(sunriseGeo, sunriseMat);
+            scene.add(sunriseMarker);
+
+            // B: Sunset State Point (Crimson Twilight Pink)
+            const sunsetGeo = new THREE.SphereGeometry(0.16, 16, 16);
+            const sunsetMat = new THREE.MeshBasicMaterial({ color: 0xEC4899 });
+            sunsetMarker = new THREE.Mesh(sunsetGeo, sunsetMat);
+            scene.add(sunsetMarker);
+
+            // C: Active Tracking Planetary Marker
+            const trackerContainerGeo = new THREE.Group();
+            const trackerGeo = new THREE.SphereGeometry(0.24, 16, 16);
+            const trackerMat = new THREE.MeshStandardMaterial({
+                color: 0x7A66F9, // Deep Indigo Purp
+                roughness: 0.1,
+                metalness: 0.8,
+                emissive: 0x312E81
+            });
+            const trackerMesh = new THREE.Mesh(trackerGeo, trackerMat);
+            trackerContainerGeo.add(trackerMesh);
+
+            // Ring around planet
+            const pRingGeo = new THREE.RingGeometry(0.32, 0.38, 30);
+            const pRingMat = new THREE.MeshBasicMaterial({ color: 0x8B9DFF, side: THREE.DoubleSide, transparent: true, opacity: 0.8 });
+            const pRing = new THREE.Mesh(pRingGeo, pRingMat);
+            pRing.rotation.x = Math.PI / 2;
+            trackerContainerGeo.add(pRing);
+
+            sunMarkerPlanet = trackerContainerGeo;
+            scene.add(sunMarkerPlanet);
+
+            // 8. PARTICLE FLOATING STARS BACKGROUND
+            const starsCount = 180;
+            const starsGeo = new THREE.BufferGeometry();
+            const positions = new Float32Array(starsCount * 3);
+            const starSpeeds = [];
+
+            for (let i = 0; i < starsCount; i++) {
+                const radius = 5 + Math.random() * 8;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos((Math.random() * 2) - 1);
+
+                positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta);
+                positions[i * 3 + 1] = radius * Math.sin(phi) * Math.sin(theta);
+                positions[i * 3 + 2] = radius * Math.cos(phi);
+
+                starSpeeds.push({
+                    speed: 0.05 + Math.random() * 0.15,
+                    axis: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize(),
+                    angle: Math.random() * Math.PI
+                });
+            }
+
+            starsGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const starsMat = new THREE.PointsMaterial({
+                color: 0xE2E8F0,
+                size: 0.045,
+                transparent: true,
+                opacity: 0.75,
+                sizeAttenuation: true
+            });
+            starsField = new THREE.Points(starsGeo, starsMat);
+            starsField.userData = { speeds: starSpeeds, positions: positions };
+            scene.add(starsField);
+
+            setupTouchListeners();
+
+            // Refresh loaded data positions
+            updateSolarTimes(currentHourCached, sunriseHourCached, sunsetHourCached, isDarkCached);
+
+            animate();
+
+            // Notify ready state
+            if (window.SolarJSBridge && window.SolarJSBridge.onHtmlReady) {
+                window.SolarJSBridge.onHtmlReady();
+            }
+        }
+
+        function updateCameraPosition() {
+            if (!camera) return;
+            camera.position.x = cameraZoom * Math.sin(currentRotationY) * Math.cos(currentRotationX);
+            camera.position.z = cameraZoom * Math.cos(currentRotationY) * Math.cos(currentRotationX);
+            camera.position.y = cameraZoom * Math.sin(currentRotationX);
+            camera.lookAt(0, 0, 0);
+        }
+
+        function getOrbitPosition(hourFloat) {
+            const angle = - (hourFloat / 24.0) * 2.0 * Math.PI + (Math.PI / 2.0);
+            return {
+                x: orbitXRadius * Math.cos(angle),
+                z: orbitZRadius * Math.sin(angle)
+            };
+        }
+
+        // JS BRIDGE COMMAND FOR DATA FEEDBACK
+        function updateSolarTimes(currentHour, sunriseHour, sunsetHour, isDark) {
+            currentHourCached = currentHour;
+            sunriseHourCached = sunriseHour;
+            sunsetHourCached = sunsetHour;
+            isDarkCached = !!isDark;
+
+            if (!threeJsLoaded) {
+                updateFallbackLayout();
+                return;
+            }
+
+            if (sunMarkerPlanet) {
+                const currentPos = getOrbitPosition(currentHour);
+                sunMarkerPlanet.position.set(currentPos.x, 0, currentPos.y);
+            }
+
+            if (sunriseMarker) {
+                const risePos = getOrbitPosition(sunriseHour);
+                sunriseMarker.position.set(risePos.x, 0, risePos.y);
+            }
+
+            if (sunsetMarker) {
+                const setPos = getOrbitPosition(sunsetHour);
+                sunsetMarker.position.set(setPos.x, 0, setPos.y);
+            }
+
+            if (orbitLine && starsField) {
+                if (isDark) {
+                    orbitLine.material.color.setHex(0x4B90FA);
+                    starsField.material.color.setHex(0xE2E8F0);
+                    starsField.material.opacity = 0.85;
+                } else {
+                    orbitLine.material.color.setHex(0x6366F1);
+                    starsField.material.color.setHex(0x475569);
+                    starsField.material.opacity = 0.35;
+                }
+            }
+        }
+
+        // 2D CSS-Based fallback representation
+        function updateFallbackLayout() {
+            const marker = document.getElementById('fallback-marker');
+            if (marker) {
+                const angle = (currentHourCached / 24.0) * 360;
+                // Offset rotate state nicely
+                marker.style.transform = `rotate(${angle}deg) translate(0, -80px) rotate(-${angle}deg)`;
+            }
+        }
+
+        function setRenderingEnabled(enabled) {
+            isLoopRunning = !!enabled;
+            if (isLoopRunning) {
+                if (clock) clock.getDelta();
+                if (threeJsLoaded) animate();
+            } else {
+                if (animationFrameId) {
+                    cancelAnimationFrame(animationFrameId);
+                    animationFrameId = null;
+                }
+            }
+        }
+
+        function animate() {
+            if (!isLoopRunning || !threeJsLoaded) return;
+
+            animationFrameId = requestAnimationFrame(animate);
+
+            if (clock) {
+                uTime += clock.getDelta();
+            } else {
+                uTime += 0.016;
+            }
+            
+            if (sunMesh && sunMesh.material.uniforms) {
+                sunMesh.material.uniforms.uTime.value = uTime;
+            }
+
+            if (sunMesh) {
+                sunMesh.rotation.y += 0.0035;
+                sunMesh.rotation.z += 0.0012;
+            }
+
+            if (sunGlowMesh) {
+                const breathing = Math.sin(uTime * 1.5) * 0.04;
+                sunGlowMesh.scale.set(1 + breathing, 1 + breathing, 1 + breathing);
+            }
+
+            // continuous elegant glide of the camera in idle tracking
+            targetRotationY += 0.0006;
+
+            currentRotationX += (targetRotationX - currentRotationX) * 0.12;
+            currentRotationY += (targetRotationY - currentRotationY) * 0.12;
+            cameraZoom += (targetZoom - cameraZoom) * 0.1;
+
+            currentRotationX = Math.max(-1.1, Math.min(1.1, currentRotationX));
+
+            updateCameraPosition();
+            renderer.render(scene, camera);
+        }
+
+        // EXCELLENT, ROBUST GESTURE INTERMET WITHOUT INTRUSIVE CAPTURE PHASES
+        function setupTouchListeners() {
+            const container = document.getElementById('canvas-container');
+
+            container.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 1) {
+                    isTouching = true;
+                    lastTouchX = e.touches[0].clientX;
+                    lastTouchY = e.touches[0].clientY;
+                } else if (e.touches.length === 2) {
+                    isTouching = false;
+                    initialDistance = Math.hypot(
+                        e.touches[0].clientX - e.touches[1].clientX,
+                        e.touches[0].clientY - e.touches[1].clientY
+                    );
+                }
+            }, { passive: true });
+
+            container.addEventListener('touchmove', (e) => {
+                if (isTouching && e.touches.length === 1) {
+                    const currentX = e.touches[0].clientX;
+                    const currentY = e.touches[0].clientY;
+
+                    const deltaX = currentX - lastTouchX;
+                    const deltaY = currentY - lastTouchY;
+
+                    lastTouchX = currentX;
+                    lastTouchY = currentY;
+
+                    targetRotationY -= deltaX * 0.005;
+                    targetRotationX -= deltaY * 0.005;
+                } else if (e.touches.length === 2 && initialDistance > 0) {
+                    const currentDist = Math.hypot(
+                        e.touches[0].clientX - e.touches[1].clientX,
+                        e.touches[0].clientY - e.touches[1].clientY
+                    );
+                    const diff = currentDist - initialDistance;
+                    initialDistance = currentDist;
+
+                    targetZoom = Math.max(3.0, Math.min(8.0, targetZoom - diff * 0.015));
+                }
+            }, { passive: true });
+
+            container.addEventListener('touchend', (e) => {
+                isTouching = false;
+                initialDistance = 0;
+            }, { passive: true });
+
+            container.addEventListener('touchcancel', (e) => {
+                isTouching = false;
+                initialDistance = 0;
+            }, { passive: true });
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function onWindowResize() {
+            if (!threeJsLoaded) return;
+            const container = document.getElementById('canvas-container');
+            const width = container.clientWidth || window.innerWidth || 150;
+            const height = container.clientHeight || window.innerHeight || 150;
+
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+
+            renderer.setSize(width, height);
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                setRenderingEnabled(false);
+            } else {
+                setRenderingEnabled(true);
+            }
+        });
+
+        window.addEventListener('load', init);
+
+        window.updateSolarTimes = updateSolarTimes;
+        window.setRenderingEnabled = setRenderingEnabled;
+    </script>
+</body>
+</html>

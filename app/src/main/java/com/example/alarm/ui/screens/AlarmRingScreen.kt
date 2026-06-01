@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessTime
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Snooze
 import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.WbTwilight
@@ -55,6 +56,10 @@ fun AlarmRingScreen(
             SleekSecondary,
             listOf(Color(0xFF2E1065), Color(0xFF1E1B4B), SleekBackground)
         )
+        "TRAVEL" -> Pair(
+            Color(0xFF10B981), // Emerald arrival green
+            listOf(Color(0xFF022C22), Color(0xFF02141C), SleekBackground)
+        )
         else -> Pair(
             SleekPrimary,
             listOf(Color(0xFF1E1B4B), Color(0xFF0F172A), SleekBackground)
@@ -102,6 +107,7 @@ fun AlarmRingScreen(
                     val icon = when (type) {
                         "SUNRISE" -> Icons.Default.WbSunny
                         "SUNSET" -> Icons.Default.WbTwilight
+                        "TRAVEL" -> Icons.Default.Explore
                         else -> Icons.Default.AccessTime
                     }
                     Icon(
@@ -117,7 +123,7 @@ fun AlarmRingScreen(
 
             // 2. ALARM TITLE INFO
             Text(
-                text = "SOLARIS ALERT TRIGGERED",
+                text = if (type == "TRAVEL") "SECURE ARRIVAL SENTRY DETECTED" else "SOLARIS ALERT TRIGGERED",
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Black,
                 color = primaryGlow,
@@ -140,6 +146,7 @@ fun AlarmRingScreen(
             val eventSummary = when (type) {
                 "SUNRISE" -> "Solar Sunrise Synchronized Alarm"
                 "SUNSET" -> "Solar Sunset Synchronized Alarm"
+                "TRAVEL" -> "Wayfarer Transit Arrival Security"
                 else -> "Standard Trigger Clock"
             }
 
@@ -167,12 +174,12 @@ fun AlarmRingScreen(
                         .shadow(16.dp, RoundedCornerShape(20.dp))
                         .testTag("dismiss_ring_button"),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFFEF4444) // Intense urgent red
+                        containerColor = if (type == "TRAVEL") Color(0xFF10B981) else Color(0xFFEF4444) // Emergeny green for travel, alert red for clocks
                     ),
                     shape = RoundedCornerShape(20.dp)
                 ) {
                     Text(
-                        text = "DISMISS ALARM",
+                        text = if (type == "TRAVEL") "ARRIVED - DISMISS ALARM" else "DISMISS ALARM",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Black,
                         color = Color.White,
@@ -180,29 +187,31 @@ fun AlarmRingScreen(
                     )
                 }
 
-                // SNOOZE CALL (OUTLINED SLEEK BUTTON)
-                OutlinedButton(
-                    onClick = onSnooze,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(56.dp)
-                        .testTag("snooze_ring_button"),
-                    border = ButtonDefaults.outlinedButtonBorder.copy(
-                        brush = Brush.linearGradient(listOf(Color.White.copy(alpha = 0.4f), Color.White.copy(alpha = 0.15f)))
-                    ),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color.White
-                    ),
-                    shape = RoundedCornerShape(20.dp)
-                ) {
-                    Icon(imageVector = Icons.Default.Snooze, contentDescription = null, tint = SleekMutedText)
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "SNOOZE WAKE",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.sp
-                    )
+                // SNOOZE CALL (OUTLINED SLEEK BUTTON - HIDDEN IN TRAVEL MODE FOR SAFETY)
+                if (type != "TRAVEL") {
+                    OutlinedButton(
+                        onClick = onSnooze,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(56.dp)
+                            .testTag("snooze_ring_button"),
+                        border = ButtonDefaults.outlinedButtonBorder.copy(
+                            brush = Brush.linearGradient(listOf(Color.White.copy(alpha = 0.4f), Color.White.copy(alpha = 0.15f)))
+                        ),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = Color.White
+                        ),
+                        shape = RoundedCornerShape(20.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Snooze, contentDescription = null, tint = SleekMutedText)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Text(
+                            text = "SNOOZE WAKE",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(24.dp))

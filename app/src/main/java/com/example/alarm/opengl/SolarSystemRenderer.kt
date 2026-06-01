@@ -85,94 +85,128 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
     private var glowProg = 0
 
     private var startNanos = 0L
+    @Volatile private var initError = false
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
-        GLES20.glClearColor(0f, 0f, 0f, 0f) // transparent — Compose paints the sky behind
-        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
-        GLES20.glEnable(GLES20.GL_BLEND)
+        try {
+            GLES20.glClearColor(0f, 0f, 0f, 0f) // transparent — Compose paints the sky behind
+            GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+            GLES20.glEnable(GLES20.GL_BLEND)
 
-        sphere = Sphere(28, 36)
-        buildOrbitRing()
-        buildStars()
-        buildSaturnRing()
+            sphere = Sphere(28, 36)
+            buildOrbitRing()
+            buildStars()
+            buildSaturnRing()
 
-        planetProg = link(VS_PLANET, FS_PLANET)
-        sunProg = link(VS_PLANET, FS_SUN)
-        orbitProg = link(VS_SIMPLE, FS_FLAT)
-        starProg = link(VS_STAR, FS_STAR)
-        glowProg = link(VS_GLOW, FS_GLOW)
+            planetProg = link(VS_PLANET, FS_PLANET)
+            sunProg = link(VS_PLANET, FS_SUN)
+            orbitProg = link(VS_SIMPLE, FS_FLAT)
+            starProg = link(VS_STAR, FS_STAR)
+            glowProg = link(VS_GLOW, FS_GLOW)
 
-        startNanos = System.nanoTime()
+            startNanos = System.nanoTime()
+            initError = false
+        } catch (e: Exception) {
+            android.util.Log.e("SolarSystemRenderer", "Surface creation failed gracefully: ", e)
+            initError = true
+        }
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
-        GLES20.glViewport(0, 0, width, height)
-        val aspect = width.toFloat() / height.coerceAtLeast(1)
-        Matrix.perspectiveM(projection, 0, 42f, aspect, 0.5f, 200f)
+        if (initError) return
+        try {
+            GLES20.glViewport(0, 0, width, height)
+            val aspect = width.toFloat() / height.coerceAtLeast(1)
+            Matrix.perspectiveM(projection, 0, 42f, aspect, 0.5f, 200f)
+        } catch (e: Exception) {
+            android.util.Log.e("SolarSystemRenderer", "Surface change failed: ", e)
+        }
     }
 
     override fun onDrawFrame(gl: GL10?) {
-        val t = (System.nanoTime() - startNanos) / 1_000_000_000f
+        if (initError) return
+        try {
+            val t = (System.nanoTime() - startNanos) / 1_000_000_000f
 
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
 
-        // Camera orbiting the origin.
-        val cp = cos(pitch); val sp = sin(pitch)
-        val cy = cos(yaw); val sy = sin(yaw)
-        val ex = distance * cp * sy
-        val ey = distance * -sp
-        val ez = distance * cp * cy
-        Matrix.setLookAtM(view, 0, ex, ey, ez, 0f, 0f, 0f, 0f, 1f, 0f)
+            // Camera orbiting the origin.
+            val cp = cos(pitch); val sp = sin(pitch)
+            val cy = cos(yaw); val sy = sin(yaw)
+            val ex = distance * cp * sy
+            val ey = distance * -sp
+            val ez = distance * cp * cy
+            Matrix.setLookAtM(view, 0, ex, ey, ez, 0f, 0f, 0f, 0f, 1f, 0f)
 
-        // Camera basis (rows of the view rotation) for billboards.
-        val rightX = view[0]; val rightY = view[4]; val rightZ = view[8]
-        val upX = view[1]; val upY = view[5]; val upZ = view[9]
+            // Camera basis (rows of the view rotation) for billboards.
+            val rightX = view[0]; val rightY = view[4]; val rightZ = view[8]
+            val upX = view[1]; val upY = view[5]; val upZ = view[9]
 
-        // --- starfield (far, depth write off) ---
-        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-        GLES20.glDepthMask(false)
-        drawStars(t)
+            // --- starfield (far, depth write off) ---
+            GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+            GLES20.glDepthMask(false)
+            drawStars(t)
 
-        // --- orbit rings ---
-        val angles = bodyAngles
-        for (i in PLANETS.indices) {
-            drawOrbit(PLANETS[i].orbit)
-        }
-        GLES20.glDepthMask(true)
-
-        // --- sun corona glow (additive billboard) ---
-        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
-        GLES20.glDepthMask(false)
-        val pulse = 1f + 0.06f * sin(t * 1.4f)
-        drawGlow(0f, 0f, 0f, SUN_RADIUS * 4.2f * pulse, rightX, rightY, rightZ, upX, upY, upZ)
-        GLES20.glDepthMask(true)
-        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-
-        // --- the Sun ---
-        Matrix.setIdentityM(model, 0)
-        Matrix.scaleM(model, 0, SUN_RADIUS, SUN_RADIUS, SUN_RADIUS)
-        drawSphere(sunProg, floatArrayOf(1.0f, 0.78f, 0.30f), t, emissive = true)
-
-        // --- planets ---
-        for (i in PLANETS.indices) {
-            val p = PLANETS[i]
-            // Start at the real heliocentric angle; in animated mode revolve onward from
-            // there at a Kepler-correct (compressed) speed so the orbit is visible.
-            val ang = if (animateOrbits) angles[i] + t * orbitOmega(p) else angles[i]
-            val x = p.orbit * cos(ang)
-            val z = p.orbit * sin(ang)
-
-            Matrix.setIdentityM(model, 0)
-            Matrix.translateM(model, 0, x, 0f, z)
-            // slow axial spin for life (not orbital motion)
-            Matrix.rotateM(model, 0, (t * p.spin) % 360f, 0f, 1f, 0f)
-            Matrix.rotateM(model, 0, p.tilt, 0f, 0f, 1f)
-            Matrix.scaleM(model, 0, p.size, p.size, p.size)
-            drawSphere(planetProg, p.color, t, emissive = false)
-
-            if (p.name == "Saturn") {
-                drawSaturnRing(x, z, t)
+            // --- orbit rings ---
+            val angles = bodyAngles
+            for (i in PLANETS.indices) {
+                drawOrbit(PLANETS[i].orbit)
             }
+            GLES20.glDepthMask(true)
+
+            // --- sun corona glow (additive billboard) ---
+            GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
+            GLES20.glDepthMask(false)
+            val pulse = 1f + 0.06f * sin(t * 1.4f)
+            drawGlow(0f, 0f, 0f, SUN_RADIUS * 4.2f * pulse, rightX, rightY, rightZ, upX, upY, upZ)
+            GLES20.glDepthMask(true)
+            GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+
+            // --- the Sun ---
+            Matrix.setIdentityM(model, 0)
+            Matrix.scaleM(model, 0, SUN_RADIUS, SUN_RADIUS, SUN_RADIUS)
+            drawSphere(sunProg, floatArrayOf(1.0f, 0.78f, 0.30f), t, emissive = true)
+
+            // --- planets ---
+            for (i in PLANETS.indices) {
+                val p = PLANETS[i]
+                // Start at the real heliocentric angle; in animated mode revolve onward from
+                // there at a Kepler-correct (compressed) speed so the orbit is visible.
+                val ang = if (animateOrbits) angles[i] + t * orbitOmega(p) else angles[i]
+                val x = p.orbit * cos(ang)
+                val z = p.orbit * sin(ang)
+
+                Matrix.setIdentityM(model, 0)
+                Matrix.translateM(model, 0, x, 0f, z)
+                // slow axial spin for life (not orbital motion)
+                Matrix.rotateM(model, 0, (t * p.spin) % 360f, 0f, 1f, 0f)
+                Matrix.rotateM(model, 0, p.tilt, 0f, 0f, 1f)
+                Matrix.scaleM(model, 0, p.size, p.size, p.size)
+                drawSphere(planetProg, p.color, t, emissive = false)
+
+                if (p.name == "Earth") {
+                    // Outer space-blue orbit line for the Moon around Earth
+                    drawOrbitAt(x, 0f, z, 0.44f, floatArrayOf(0.4f, 0.55f, 0.8f, 0.25f))
+
+                    // Moon orbits Earth at an offset with a cool 3D plane inclination/tilt animation
+                    val mSpeed = t * 3.2f
+                    val mx = x + 0.44f * cos(mSpeed.toDouble()).toFloat()
+                    // Use sine waves to incline the Moon's 3D orbit around Earth for gorgeous depth
+                    val my = 0.08f * sin(mSpeed.toDouble()).toFloat()
+                    val mz = z + 0.44f * sin(mSpeed.toDouble()).toFloat()
+
+                    Matrix.setIdentityM(model, 0)
+                    Matrix.translateM(model, 0, mx, my, mz)
+                    Matrix.scaleM(model, 0, 0.045f, 0.045f, 0.045f) // Moon is smaller
+                    drawSphere(planetProg, floatArrayOf(0.72f, 0.72f, 0.74f), t, emissive = false)
+                }
+
+                if (p.name == "Saturn") {
+                    drawSaturnRing(x, z, t)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("SolarSystemRenderer", "Frame composition failed gracefully: ", e)
         }
     }
 
@@ -222,14 +256,15 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
         if (nrm >= 0) GLES20.glDisableVertexAttribArray(nrm)
     }
 
-    private fun drawOrbit(radius: Float) {
+    private fun drawOrbitAt(cx: Float, cy: Float, cz: Float, radius: Float, rColor: FloatArray) {
         GLES20.glUseProgram(orbitProg)
         Matrix.setIdentityM(model, 0)
+        Matrix.translateM(model, 0, cx, cy, cz)
         Matrix.scaleM(model, 0, radius, radius, radius)
         Matrix.multiplyMM(tmp, 0, view, 0, model, 0)
         Matrix.multiplyMM(mvp, 0, projection, 0, tmp, 0)
         GLES20.glUniformMatrix4fv(uni(orbitProg, "uMvp"), 1, false, mvp, 0)
-        GLES20.glUniform4f(uni(orbitProg, "uColor"), 0.45f, 0.5f, 0.7f, 0.22f)
+        GLES20.glUniform4f(uni(orbitProg, "uColor"), rColor[0], rColor[1], rColor[2], rColor[3])
         val pos = attr(orbitProg, "aPos")
         GLES20.glEnableVertexAttribArray(pos)
         orbitRing.position(0)
@@ -237,6 +272,10 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
         GLES20.glLineWidth(1.5f)
         GLES20.glDrawArrays(GLES20.GL_LINE_LOOP, 0, orbitVertexCount)
         GLES20.glDisableVertexAttribArray(pos)
+    }
+
+    private fun drawOrbit(radius: Float) {
+        drawOrbitAt(0f, 0f, 0f, radius, floatArrayOf(0.45f, 0.5f, 0.7f, 0.22f))
     }
 
     private fun drawStars(t: Float) {

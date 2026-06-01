@@ -1,6 +1,6 @@
 {
-  "name": "Sunrise Sunset Alarm",
-  "description": "Premium daylight-aligned alarm client that automatically sets alarms relative to sunrise and sunset using location calculations, paired with standard time-based alarms and interactive 3D OpenGL visualization.",
+  "name": "Solaris Alarms",
+  "description": "An interactive offline astronomical sun-tracking alarm clock & live weather station.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

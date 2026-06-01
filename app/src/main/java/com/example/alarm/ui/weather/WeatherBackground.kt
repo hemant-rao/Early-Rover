@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -68,7 +69,7 @@ fun WeatherBackground(
 
         // Night stars
         for (s in stars) {
-            val tw = 0.4f + 0.6f * (0.5f + 0.5f * sin((pulse * 2f * PI.toFloat()) + s.phase))
+            val tw = 0.4f + 0.6f * (0.5f + 0.5f * sin(((pulse * 2f * PI.toFloat()) + s.phase).toDouble()).toFloat())
             drawCircle(
                 color = Color.White.copy(alpha = 0.7f * tw),
                 radius = s.r * density,

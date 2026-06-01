@@ -41,15 +41,28 @@ fun Celestial3DView(
         update = { it.animateOrbits = animateOrbits }
     )
 
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, glView) {
+        val view = glView ?: return@DisposableEffect onDispose {}
+
+        // Sync with current lifecycle state upon attachment
+        val currentLifecycleState = lifecycleOwner.lifecycle.currentState
+        if (currentLifecycleState.isAtLeast(Lifecycle.State.RESUMED)) {
+            view.onResume()
+        } else {
+            view.onPause()
+        }
+
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> glView?.onResume()
-                Lifecycle.Event.ON_PAUSE -> glView?.onPause()
+                Lifecycle.Event.ON_RESUME -> view.onResume()
+                Lifecycle.Event.ON_PAUSE -> view.onPause()
                 else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            view.onPause() // ensure it is paused upon disposal to release graphics resources
+        }
     }
 }

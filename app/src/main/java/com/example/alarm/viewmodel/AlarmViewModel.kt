@@ -12,10 +12,13 @@ import com.example.alarm.data.AlarmRepository
 import com.example.alarm.data.AppDatabase
 import com.example.alarm.location.CityInfo
 import com.example.alarm.location.LocationHelper
+import com.example.alarm.data.TravelAlarm
+import com.example.alarm.location.TravelTrackingService
 import com.example.alarm.scheduling.AlarmScheduler
 import com.example.alarm.scheduling.AlarmService
 import com.example.alarm.weather.WeatherInfo
 import com.example.alarm.weather.WeatherRepository
+import com.example.alarm.weather.DetailedWeatherInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -32,7 +35,7 @@ data class RingingAlarmState(
 class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     private val database = AppDatabase.getDatabase(application)
-    private val repository = AlarmRepository(database.alarmDao())
+    private val repository = AlarmRepository(database.alarmDao(), database.travelAlarmDao())
     private val scheduler = AlarmScheduler(application)
     private val locationHelper = LocationHelper(application)
     private var searchJob: kotlinx.coroutines.Job? = null
@@ -70,6 +73,12 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     private val _weather = MutableStateFlow<WeatherInfo?>(null)
     val weather: StateFlow<WeatherInfo?> = _weather.asStateFlow()
 
+    private val _detailedWeather = MutableStateFlow<DetailedWeatherInfo?>(null)
+    val detailedWeather: StateFlow<DetailedWeatherInfo?> = _detailedWeather.asStateFlow()
+
+    private val _isWeatherLoading = MutableStateFlow(false)
+    val isWeatherLoading: StateFlow<Boolean> = _isWeatherLoading.asStateFlow()
+
     // Upcoming Hero alarm info
     private val _nextUpcomingAlarm = MutableStateFlow<Alarm?>(null)
     val nextUpcomingAlarm: StateFlow<Alarm?> = _nextUpcomingAlarm.asStateFlow()
@@ -87,6 +96,10 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     // Location search result listing
     private val _searchResults = MutableStateFlow<List<CityInfo>>(emptyList())
     val searchResults: StateFlow<List<CityInfo>> = _searchResults.asStateFlow()
+
+    // Saved multi-cities states
+    private val _savedCities = MutableStateFlow<List<CityInfo>>(emptyList())
+    val savedCities: StateFlow<List<CityInfo>> = _savedCities.asStateFlow()
 
     // System Settings preferences
     private val settingsPrefs = application.getSharedPreferences("sun_alarm_settings_prefs", Context.MODE_PRIVATE)
@@ -182,15 +195,62 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     init {
         recomputeSunTimes()
         observeAlarmsForUpcoming()
+
+        // Initialize saved location cities database
+        val savedStr = settingsPrefs.getString("saved_cities_list", "") ?: ""
+        if (savedStr.isEmpty()) {
+            val defaultCity = CityInfo(
+                locationHelper.getSavedLocationName().ifEmpty { "New York" },
+                "United States",
+                locationHelper.getSavedLatitude(),
+                locationHelper.getSavedLongitude(),
+                locationHelper.getSavedTimezoneOffset()
+            )
+            val initialList = listOf(defaultCity)
+            _savedCities.value = initialList
+            saveCitiesToPrefs(initialList)
+        } else {
+            val list = mutableListOf<CityInfo>()
+            savedStr.split(";").forEach { item ->
+                if (item.isNotEmpty()) {
+                    val parts = item.split("|")
+                    if (parts.size >= 5) {
+                        list.add(
+                            CityInfo(
+                                parts[0],
+                                parts[1],
+                                parts[2].toDoubleOrNull() ?: 40.7128,
+                                parts[3].toDoubleOrNull() ?: -74.0060,
+                                parts[4].toDoubleOrNull() ?: -5.0
+                            )
+                        )
+                    }
+                }
+            }
+            _savedCities.value = list
+        }
     }
 
     fun refreshWeather() {
         val lat = _latitude.value
         val lng = _longitude.value
+        _isWeatherLoading.value = true
         viewModelScope.launch(Dispatchers.IO) {
-            val info = WeatherRepository.fetchCurrent(lat, lng)
-            if (info != null) {
-                _weather.value = info
+            try {
+                val detailed = WeatherRepository.fetchDetailed(lat, lng)
+                if (detailed != null) {
+                    _detailedWeather.value = detailed
+                    _weather.value = detailed.current
+                } else {
+                    val info = WeatherRepository.fetchCurrent(lat, lng)
+                    if (info != null) {
+                        _weather.value = info
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("AlarmViewModel", "Weather refresh failed: ", e)
+            } finally {
+                _isWeatherLoading.value = false
             }
         }
     }
@@ -370,6 +430,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         _locationName.value = city.name
         
         recomputeSunTimes()
+        refreshWeather()
     }
 
     fun searchLocationQuery(query: String) {
@@ -390,6 +451,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 _timezoneOffset.value = offset
                 _locationName.value = name
                 recomputeSunTimes()
+                refreshWeather()
             },
             onFailure = { e ->
                 Log.e("AlarmViewModel", "Failed to detect automatic GPS location", e)
@@ -406,13 +468,17 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         val ringingId = _ringingAlarm.value?.id ?: -1
         _ringingAlarm.value = null
         
-        // Command service to halt playing
         val context = getApplication<Application>()
-        val dismissIntent = Intent(context, AlarmService::class.java).apply {
-            action = "ACTION_DISMISS"
-            putExtra("ALARM_ID", ringingId)
+        if (ringingId >= 500000) {
+            TravelTrackingService.stopService(context)
+        } else {
+            // Command service to halt playing
+            val dismissIntent = Intent(context, AlarmService::class.java).apply {
+                action = "ACTION_DISMISS"
+                putExtra("ALARM_ID", ringingId)
+            }
+            context.startService(dismissIntent)
         }
-        context.startService(dismissIntent)
     }
 
     fun stopRingingAlarmAndSnooze() {
@@ -420,11 +486,15 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         _ringingAlarm.value = null
 
         val context = getApplication<Application>()
-        val snoozeIntent = Intent(context, AlarmService::class.java).apply {
-            action = "ACTION_SNOOZE"
-            putExtra("ALARM_ID", ringingId)
+        if (ringingId >= 500000) {
+            TravelTrackingService.stopService(context)
+        } else {
+            val snoozeIntent = Intent(context, AlarmService::class.java).apply {
+                action = "ACTION_SNOOZE"
+                putExtra("ALARM_ID", ringingId)
+            }
+            context.startService(snoozeIntent)
         }
-        context.startService(snoozeIntent)
     }
 
     // Setting management preferences
@@ -437,5 +507,85 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     fun setDefaultSnoozeMinutes(minutes: Int) {
         _defaultSnoozeMinutes.value = minutes
         settingsPrefs.edit().putInt("default_snooze", minutes).apply()
+    }
+
+    // SAVED LOCATIONS STORAGE & MANAGEMENT
+    private fun saveCitiesToPrefs(list: List<CityInfo>) {
+        val str = list.joinToString(";") { "${it.name}|${it.country}|${it.latitude}|${it.longitude}|${it.timezoneOffset}" }
+        settingsPrefs.edit().putString("saved_cities_list", str).apply()
+    }
+
+    fun addSavedCity(city: CityInfo) {
+        val current = _savedCities.value.toMutableList()
+        if (!current.any { it.name.lowercase() == city.name.lowercase() }) {
+            current.add(city)
+            _savedCities.value = current
+            saveCitiesToPrefs(current)
+        }
+        setManualCitySelection(city)
+    }
+
+    fun deleteSavedCity(city: CityInfo) {
+        val current = _savedCities.value.toMutableList()
+        current.removeAll { it.name.lowercase() == city.name.lowercase() }
+        
+        // Ensure at least one city remains
+        if (current.isEmpty()) {
+            current.add(city)
+        }
+        _savedCities.value = current
+        saveCitiesToPrefs(current)
+        
+        // If we deleted the active city, select another one
+        if (locationName.value.lowercase() == city.name.lowercase() && current.isNotEmpty()) {
+            setManualCitySelection(current[0])
+        }
+    }
+
+    // --- TRAVEL / DESTINATION ARRIVAL ALARM SYSTEMS ---
+    val allTravelAlarms: StateFlow<List<TravelAlarm>> = repository.allTravelAlarms
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun insertTravelAlarm(alarm: TravelAlarm) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.insertTravelAlarm(alarm)
+        }
+    }
+
+    fun updateTravelAlarm(alarm: TravelAlarm) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.updateTravelAlarm(alarm)
+        }
+    }
+
+    fun deleteTravelAlarm(alarm: TravelAlarm) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.deleteTravelAlarm(alarm)
+        }
+    }
+
+    fun toggleTravelAlarmActive(alarm: TravelAlarm) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val updated = alarm.copy(active = !alarm.active)
+            repository.updateTravelAlarm(updated)
+        }
+    }
+    
+    // Companion tracking fields bound directly to services
+    val isTravelTrackingActive = TravelTrackingService.isTracking
+    val travelCurrentLocation = TravelTrackingService.currentLocation
+    val travelNearestAlarm = TravelTrackingService.nearestAlarm
+    val travelDistanceToNearest = TravelTrackingService.distanceToNearestKm
+    val travelStatusMsg = TravelTrackingService.statusMessage
+    val travelCurrentSpeed = TravelTrackingService.currentSpeedKmh
+
+    fun startTravelTracking() {
+        val context = getApplication<Application>()
+        TravelTrackingService.startService(context)
+    }
+
+    fun stopTravelTracking() {
+        val context = getApplication<Application>()
+        TravelTrackingService.stopService(context)
     }
 }

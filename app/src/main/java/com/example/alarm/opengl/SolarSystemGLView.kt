@@ -47,46 +47,69 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        onResume()
         postDelayed(ticker, 60_000L)
     }
 
     override fun onDetachedFromWindow() {
         removeCallbacks(ticker)
+        onPause()
         super.onDetachedFromWindow()
+    }
+
+    private fun requestDisallowIntercept(disallow: Boolean) {
+        var p = parent
+        while (p != null) {
+            p.requestDisallowInterceptTouchEvent(disallow)
+            p = p.parent
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                parent?.requestDisallowInterceptTouchEvent(true)
+                requestDisallowIntercept(true)
                 lastX = event.x; lastY = event.y; mode = DRAG
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 lastPinch = spacing(event); mode = ZOOM
             }
             MotionEvent.ACTION_MOVE -> {
-                parent?.requestDisallowInterceptTouchEvent(true)
+                requestDisallowIntercept(true)
                 if (mode == ZOOM && event.pointerCount >= 2) {
                     val d = spacing(event)
-                    if (lastPinch > 0f) {
+                    if (d > 10f && lastPinch > 10f) {
                         val factor = lastPinch / d
-                        renderer.distance = (renderer.distance * factor).coerceIn(7f, 32f)
+                        if (!factor.isNaN() && !factor.isInfinite()) {
+                            renderer.distance = (renderer.distance * factor).coerceIn(7f, 32f)
+                        }
                     }
                     lastPinch = d
                 } else if (mode == DRAG) {
                     val dx = event.x - lastX
                     val dy = event.y - lastY
-                    renderer.yaw += dx * 0.006f
-                    renderer.pitch = (renderer.pitch + dy * 0.006f).coerceIn(-1.45f, -0.05f)
+                    if (!dx.isNaN() && !dx.isInfinite() && !dy.isNaN() && !dy.isInfinite()) {
+                        renderer.yaw += dx * 0.006f
+                        renderer.pitch = (renderer.pitch + dy * 0.006f).coerceIn(-1.52f, 0.35f)
+                    }
                     lastX = event.x; lastY = event.y
                 }
             }
             MotionEvent.ACTION_POINTER_UP -> {
                 mode = DRAG
-                lastX = event.x; lastY = event.y
+                val activeIndex = if (event.actionIndex == 0) 1 else 0
+                if (activeIndex < event.pointerCount) {
+                    try {
+                        lastX = event.getX(activeIndex)
+                        lastY = event.getY(activeIndex)
+                    } catch (e: Exception) {
+                        lastX = event.x
+                        lastY = event.y
+                    }
+                }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                parent?.requestDisallowInterceptTouchEvent(false)
+                requestDisallowIntercept(false)
                 mode = NONE
             }
         }
@@ -95,7 +118,11 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
 
     private fun spacing(e: MotionEvent): Float {
         if (e.pointerCount < 2) return 0f
-        return hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
+        return try {
+            hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
+        } catch (ex: Exception) {
+            0f
+        }
     }
 
     private companion object {

@@ -20,6 +20,8 @@
     <!-- Foreground services and types -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
     <application
         android:allowBackup="true"
@@ -50,6 +52,12 @@
         <service
             android:name=".alarm.scheduling.AlarmService"
             android:foregroundServiceType="mediaPlayback"
+            android:exported="false" />
+
+        <!-- Intelligent continuous travel tracking location service -->
+        <service
+            android:name=".alarm.location.TravelTrackingService"
+            android:foregroundServiceType="location"
             android:exported="false" />
 
         <!-- Alarm Manager broadcast receiver -->

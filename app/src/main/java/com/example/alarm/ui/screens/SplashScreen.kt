@@ -87,23 +87,23 @@ fun SplashScreen(onNavigateToDashboard: () -> Unit) {
                 )
                 Icon(
                     imageVector = Icons.Default.WbSunny,
-                    contentDescription = "Solaris App Logo",
+                    contentDescription = "Solaris Alarms Logo",
                     tint = SleekSolarAccent,
                     modifier = Modifier.size(56.dp)
                 )
             }
             Spacer(modifier = Modifier.height(24.dp))
             Text(
-                text = "SOLARIS",
-                fontSize = 32.sp,
+                text = "SOLARIS ALARMS",
+                fontSize = 28.sp,
                 color = SleekActiveText,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.SansSerif,
-                letterSpacing = 6.sp
+                letterSpacing = 4.sp
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Daylight & Dynamic Alarms",
+                text = "Astronomical Sun Tracker & Alarms",
                 fontSize = 14.sp,
                 color = SleekMutedText,
                 fontWeight = FontWeight.Medium,

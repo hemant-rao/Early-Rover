@@ -89,85 +89,90 @@ class LocationHelper(private val context: Context) {
                     val rawTzOffset = Math.round(lng / 15.0).toDouble()
                     val roundedTzOffset = Math.max(-12.0, Math.min(14.0, rawTzOffset))
                     
-                    // Dynamic Reverse Geocoder using built-in Android Geocoder
-                    var detectedName = ""
-                    try {
-                        if (android.location.Geocoder.isPresent()) {
-                            val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
-                            @Suppress("DEPRECATION")
-                            val addresses = geocoder.getFromLocation(lat, lng, 1)
-                            if (!addresses.isNullOrEmpty()) {
-                                val address = addresses[0]
-                                val city = address.locality ?: address.subAdminArea ?: address.adminArea ?: address.thoroughfare ?: ""
-                                val country = address.countryCode ?: address.countryName ?: ""
-                                detectedName = if (city.isNotEmpty() && country.isNotEmpty()) {
-                                    "$city, $country"
-                                } else if (city.isNotEmpty()) {
-                                    city
-                                } else if (address.countryName != null) {
-                                    address.countryName
-                                } else {
-                                    ""
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-
-                    // Fallback to OSM Nominatim reverse geocoding if local geocoder returned nothing
-                    if (detectedName.isEmpty()) {
+                    // Run blocking reverse geocoding on a background thread to prevent NetworkOnMainThreadException
+                    Thread {
+                        var detectedName = ""
                         try {
-                            val url = URL("https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json&accept-language=en")
-                            val connection = url.openConnection() as HttpURLConnection
-                            connection.requestMethod = "GET"
-                            connection.connectTimeout = 4000
-                            connection.readTimeout = 4000
-                            connection.setRequestProperty("User-Agent", "SolariAlarmApp")
-                            
-                            val responseCode = connection.responseCode
-                            if (responseCode == HttpURLConnection.HTTP_OK) {
-                                val reader = BufferedReader(InputStreamReader(connection.inputStream))
-                                val response = StringBuilder()
-                                var line: String?
-                                while (reader.readLine().also { line = it } != null) {
-                                    response.append(line)
-                                }
-                                reader.close()
-                                
-                                val jsonObject = JSONObject(response.toString())
-                                if (jsonObject.has("address")) {
-                                    val addrObj = jsonObject.getJSONObject("address")
-                                    val city = addrObj.optString("city", "")
-                                        .ifEmpty { addrObj.optString("town", "") }
-                                        .ifEmpty { addrObj.optString("village", "") }
-                                        .ifEmpty { addrObj.optString("suburb", "") }
-                                        .ifEmpty { addrObj.optString("hamlet", "") }
-                                        .ifEmpty { addrObj.optString("county", "") }
-                                    val country = addrObj.optString("country_code", "").uppercase().ifEmpty {
-                                        addrObj.optString("country", "")
-                                    }
-                                    
+                            if (android.location.Geocoder.isPresent()) {
+                                val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
+                                @Suppress("DEPRECATION")
+                                val addresses = geocoder.getFromLocation(lat, lng, 1)
+                                if (!addresses.isNullOrEmpty()) {
+                                    val address = addresses[0]
+                                    val city = address.locality ?: address.subAdminArea ?: address.adminArea ?: address.thoroughfare ?: ""
+                                    val country = address.countryCode ?: address.countryName ?: ""
                                     detectedName = if (city.isNotEmpty() && country.isNotEmpty()) {
                                         "$city, $country"
                                     } else if (city.isNotEmpty()) {
                                         city
+                                    } else if (address.countryName != null) {
+                                        address.countryName
                                     } else {
-                                        country
+                                        ""
                                     }
                                 }
                             }
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
-                    }
 
-                    if (detectedName.isEmpty()) {
-                        detectedName = String.format(java.util.Locale.US, "GPS: %.4f, %.4f", lat, lng)
-                    }
-                    
-                    saveLocation(lat, lng, roundedTzOffset, detectedName)
-                    onSuccess(lat, lng, roundedTzOffset, detectedName)
+                        // Fallback to OSM Nominatim reverse geocoding if local geocoder returned nothing
+                        if (detectedName.isEmpty()) {
+                            try {
+                                val url = URL("https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json&accept-language=en")
+                                val connection = url.openConnection() as HttpURLConnection
+                                connection.requestMethod = "GET"
+                                connection.connectTimeout = 4000
+                                connection.readTimeout = 4000
+                                connection.setRequestProperty("User-Agent", "SolariAlarmApp")
+                                
+                                val responseCode = connection.responseCode
+                                if (responseCode == HttpURLConnection.HTTP_OK) {
+                                    val reader = BufferedReader(InputStreamReader(connection.inputStream))
+                                    val response = StringBuilder()
+                                    var line: String?
+                                    while (reader.readLine().also { line = it } != null) {
+                                        response.append(line)
+                                    }
+                                    reader.close()
+                                    
+                                    val jsonObject = JSONObject(response.toString())
+                                    if (jsonObject.has("address")) {
+                                        val addrObj = jsonObject.getJSONObject("address")
+                                        val city = addrObj.optString("city", "")
+                                            .ifEmpty { addrObj.optString("town", "") }
+                                            .ifEmpty { addrObj.optString("village", "") }
+                                            .ifEmpty { addrObj.optString("suburb", "") }
+                                            .ifEmpty { addrObj.optString("hamlet", "") }
+                                            .ifEmpty { addrObj.optString("county", "") }
+                                        val country = addrObj.optString("country_code", "").uppercase().ifEmpty {
+                                            addrObj.optString("country", "")
+                                        }
+                                        
+                                        detectedName = if (city.isNotEmpty() && country.isNotEmpty()) {
+                                            "$city, $country"
+                                        } else if (city.isNotEmpty()) {
+                                            city
+                                        } else {
+                                            country
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+
+                        if (detectedName.isEmpty()) {
+                            detectedName = String.format(java.util.Locale.US, "GPS: %.4f, %.4f", lat, lng)
+                        }
+                        
+                        saveLocation(lat, lng, roundedTzOffset, detectedName)
+                        
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            onSuccess(lat, lng, roundedTzOffset, detectedName)
+                        }
+                    }.start()
                 } else {
                     onFailure(Exception("GPS location returned null"))
                 }
