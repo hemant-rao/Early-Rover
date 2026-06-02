@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import com.example.alarm.weather.WeatherCondition
 import com.example.alarm.weather.WeatherInfo
+import java.time.LocalTime
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -34,7 +35,7 @@ fun WeatherBackground(
     modifier: Modifier = Modifier
 ) {
     val condition = weather?.condition ?: WeatherCondition.CLEAR
-    val isDay = weather?.isDay ?: true
+    val isDay = weather?.isDay ?: (LocalTime.now().hour in 6..17)
 
     val transition = rememberInfiniteTransition(label = "weather")
     // Continuous phase 0..1 (periodic) for falling particles and ray rotation.

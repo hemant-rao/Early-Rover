@@ -70,7 +70,7 @@ object WeatherRepository {
         return try {
             val url = URL(
                 "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
-                    "&current=temperature_2m,weather_code,is_day&timezone=auto"
+                    "&current=temperature_2m,weather_code,is_day,cloud_cover&timezone=auto"
             )
             val connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -82,10 +82,12 @@ object WeatherRepository {
             val response = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
             val current = JSONObject(response).optJSONObject("current") ?: return null
 
-            val code = current.optInt("weather_code", 0)
+            // Missing weather_code -> -1 (unknown) so we don't silently fall back to "clear".
+            val code = current.optInt("weather_code", -1)
+            val cloudCover = current.optInt("cloud_cover", -1)
             val isDay = current.optInt("is_day", 1) == 1
             val temp = current.optDouble("temperature_2m", Double.NaN)
-            WeatherInfo(mapCode(code), isDay, temp, code)
+            WeatherInfo(refineCondition(code, cloudCover), isDay, temp, code)
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -103,7 +105,7 @@ object WeatherRepository {
             val urlString = "https://api.open-meteo.com/v1/forecast?" +
                     "latitude=$latitude" +
                     "&longitude=$longitude" +
-                    "&current=temperature_2m,weather_code,is_day,relative_humidity_2m,apparent_temperature,precipitation,wind_speed_10m" +
+                    "&current=temperature_2m,weather_code,is_day,cloud_cover,relative_humidity_2m,apparent_temperature,precipitation,wind_speed_10m" +
                     "&hourly=temperature_2m,weather_code,relative_humidity_2m,apparent_temperature,precipitation,wind_speed_10m" +
                     "&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset" +
                     "&past_days=10" +
@@ -122,7 +124,8 @@ object WeatherRepository {
             val root = JSONObject(response)
             
             val currentJson = root.optJSONObject("current") ?: return null
-            val code = currentJson.optInt("weather_code", 0)
+            val code = currentJson.optInt("weather_code", -1)
+            val cloudCover = currentJson.optInt("cloud_cover", -1)
             val isDay = currentJson.optInt("is_day", 1) == 1
             val temp = currentJson.optDouble("temperature_2m", 0.0)
             val relativeHumidity = currentJson.optInt("relative_humidity_2m", 0)
@@ -130,7 +133,7 @@ object WeatherRepository {
             val precipitation = currentJson.optDouble("precipitation", 0.0)
             val windSpeed = currentJson.optDouble("wind_speed_10m", 0.0)
 
-            val currentInfo = WeatherInfo(mapCode(code), isDay, temp, code)
+            val currentInfo = WeatherInfo(refineCondition(code, cloudCover), isDay, temp, code)
 
             // Parse Hourly List
             val hourlyObj = root.optJSONObject("hourly")
@@ -216,6 +219,29 @@ object WeatherRepository {
             e.printStackTrace()
             null
         }
+    }
+
+    /**
+     * Combines the WMO [code] with the measured [cloudCover] percent so the visible sky
+     * matches reality. Precipitation / fog / snow / thunder codes always win. For the
+     * clear↔overcast family we trust the actual cloud cover (the WMO code alone often
+     * reports "mainly clear" on a hazy/overcast day, which is why the app used to show
+     * "clear sky" while every other app showed clouds). [cloudCover] < 0 means unknown.
+     */
+    fun refineCondition(code: Int, cloudCover: Int): WeatherCondition {
+        val base = mapCode(code)
+        val isClearFamily = base == WeatherCondition.CLEAR ||
+            base == WeatherCondition.FEW_CLOUDS ||
+            base == WeatherCondition.CLOUDS
+        // Only the clear/cloud family is refined by cloud cover; keep rain/snow/fog/thunder intact.
+        if (isClearFamily && cloudCover >= 0) {
+            return when {
+                cloudCover < 12 -> WeatherCondition.CLEAR
+                cloudCover < 50 -> WeatherCondition.FEW_CLOUDS
+                else -> WeatherCondition.CLOUDS
+            }
+        }
+        return base
     }
 
     /** Maps WMO weather interpretation codes to our coarse categories. */

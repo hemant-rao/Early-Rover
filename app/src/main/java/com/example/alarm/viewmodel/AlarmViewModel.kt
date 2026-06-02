@@ -115,6 +115,16 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         com.example.alarm.util.LocaleHelper.getPersistedTag(application)
     )
 
+    // True while the activity is being recreated for a language switch. Survives recreate()
+    // (the ViewModelStore is retained), so MainActivity can keep a loader on top of the
+    // black recreate gap and clear it once the new UI is ready.
+    private val _isSwitchingLanguage = MutableStateFlow(false)
+    val isSwitchingLanguage: StateFlow<Boolean> = _isSwitchingLanguage.asStateFlow()
+
+    fun clearLanguageSwitching() {
+        _isSwitchingLanguage.value = false
+    }
+
     /**
      * Sets the UI language. Persists via [LocaleHelper], then recreates the activity so
      * attachBaseContext re-reads the locale (LocalConfiguration updates). The ViewModel
@@ -124,6 +134,8 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     fun setAppLanguage(tag: String, activity: android.app.Activity? = null) {
         if (tag == currentLanguage.value) return
         currentLanguage.value = tag
+        // Raise the loader before the recreate so MainActivity covers the native black gap.
+        _isSwitchingLanguage.value = true
         com.example.alarm.util.LocaleHelper.persist(getApplication(), tag)
         // On API 33+ persist() sets the framework LocaleManager, which itself recreates the
         // activity; calling recreate() again would rebuild twice. Only recreate manually below 33.
@@ -462,6 +474,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             _searchResults.value = results
         }
     }
+
+    /** True when the app should follow GPS (i.e. the user hasn't pinned a manual city). */
+    fun isAutoLocationEnabled(): Boolean = locationHelper.isAutoDetectEnabled()
 
     fun triggerAutoLocationDetect() {
         locationHelper.setAutoDetect(true)
