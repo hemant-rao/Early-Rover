@@ -37,6 +37,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
@@ -96,6 +99,7 @@ fun DashboardScreen(
 
     var showQuickAddMenu by remember { mutableStateOf(false) }
     var showLocationSearchDialog by remember { mutableStateOf(false) }
+    var selectedPlanet by remember { mutableStateOf<String?>(null) }
     var activeTab by remember { mutableIntStateOf(0) }
 
     // Honor a tab requested from a tapped notification, then clear it so manual
@@ -124,8 +128,23 @@ fun DashboardScreen(
         }
     }
 
+    // On open: if the user is following GPS (hasn't pinned a manual city) and location
+    // permission is already granted, detect the REAL current location so the weather
+    // reflects where the user actually is — not the default fallback city. Otherwise just
+    // refresh weather for the saved/manual location.
+    val dashContext = LocalContext.current
     LaunchedEffect(Unit) {
-        viewModel.refreshWeather()
+        val granted = ContextCompat.checkSelfPermission(
+            dashContext, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(
+                dashContext, Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        if (granted && viewModel.isAutoLocationEnabled()) {
+            viewModel.triggerAutoLocationDetect()
+        } else {
+            viewModel.refreshWeather()
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -532,7 +551,8 @@ fun DashboardScreen(
                                         sunsetTime = sunset,
                                         activeAlarms = alarms.filter { it.active }.map { Pair(it.hour, it.minute) },
                                         isDark = darkTheme,
-                                        animateOrbits = true
+                                        animateOrbits = true,
+                                        onPlanetSelected = { selectedPlanet = it }
                                     )
                                 }
 
@@ -958,6 +978,10 @@ fun DashboardScreen(
             },
             onDismiss = { showLocationSearchDialog = false }
         )
+    }
+
+    selectedPlanet?.let { body ->
+        PlanetInfoDialog(planetName = body, onDismiss = { selectedPlanet = null })
     }
     }
 }
@@ -1393,7 +1417,7 @@ fun LocationSearchDialog(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
-                                            viewModel.setManualCitySelection(city)
+                                            viewModel.addSavedCity(city)
                                             onDismiss()
                                         }
                                         .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(10.dp)),
