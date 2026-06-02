@@ -30,26 +30,15 @@ fun Celestial3DView(
     activeAlarms: List<Pair<Int, Int>> = emptyList(),
     isDark: Boolean = isSystemInDarkTheme(),
     /** true -> planets visibly orbit the Sun; false -> hold exact real-time positions. */
-    animateOrbits: Boolean = true,
-    /** Invoked with the tapped body name ("Sun","Mercury",..,"Neptune"). */
-    onPlanetSelected: (String) -> Unit = {}
+    animateOrbits: Boolean = true
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     var glView by remember { mutableStateOf<SolarSystemGLView?>(null) }
 
     AndroidView(
         modifier = modifier.fillMaxSize(),
-        factory = { ctx ->
-            SolarSystemGLView(ctx).also {
-                it.animateOrbits = animateOrbits
-                it.onBodyTap = { name -> onPlanetSelected(name) }
-                glView = it
-            }
-        },
-        update = {
-            it.animateOrbits = animateOrbits
-            it.onBodyTap = { name -> onPlanetSelected(name) }
-        }
+        factory = { ctx -> SolarSystemGLView(ctx).also { it.animateOrbits = animateOrbits; glView = it } },
+        update = { it.animateOrbits = animateOrbits }
     )
 
     DisposableEffect(lifecycleOwner, glView) {

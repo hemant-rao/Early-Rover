@@ -22,18 +22,10 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
         get() = renderer.animateOrbits
         set(value) { renderer.animateOrbits = value }
 
-    /** Invoked (on the main thread) with a body name when one is tapped. */
-    var onBodyTap: ((String) -> Unit)? = null
-
     private var lastX = 0f
     private var lastY = 0f
     private var lastPinch = 0f
     private var mode = NONE
-
-    // ----- tap-vs-drag discrimination -----
-    private var downX = 0f
-    private var downY = 0f
-    private var moved = false
 
     private val ticker = Runnable { refreshAndScheduleNext() }
 
@@ -78,10 +70,9 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
             MotionEvent.ACTION_DOWN -> {
                 requestDisallowIntercept(true)
                 lastX = event.x; lastY = event.y; mode = DRAG
-                downX = event.x; downY = event.y; moved = false
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
-                lastPinch = spacing(event); mode = ZOOM; moved = true
+                lastPinch = spacing(event); mode = ZOOM
             }
             MotionEvent.ACTION_MOVE -> {
                 requestDisallowIntercept(true)
@@ -102,8 +93,6 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
                         renderer.pitch = (renderer.pitch + dy * 0.006f).coerceIn(-1.52f, 0.35f)
                     }
                     lastX = event.x; lastY = event.y
-                    // Past the slop radius this gesture is a drag, not a tap.
-                    if (hypot(event.x - downX, event.y - downY) > TAP_SLOP) moved = true
                 }
             }
             MotionEvent.ACTION_POINTER_UP -> {
@@ -120,11 +109,6 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (event.actionMasked == MotionEvent.ACTION_UP && mode == DRAG && !moved) {
-                    // A real tap (no drag, no pinch): pick the body under the finger.
-                    val name = renderer.pickBody(event.x, event.y)
-                    if (name != null) post { onBodyTap?.invoke(name) }
-                }
                 requestDisallowIntercept(false)
                 mode = NONE
             }
@@ -145,6 +129,5 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
         const val NONE = 0
         const val DRAG = 1
         const val ZOOM = 2
-        const val TAP_SLOP = 12f
     }
 }

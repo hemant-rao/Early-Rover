@@ -7,22 +7,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Text
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
 import com.example.alarm.util.LocaleHelper
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -60,19 +49,8 @@ class MainActivity : ComponentActivity() {
             }
 
             val darkTheme by viewModel.darkThemeEnabled.collectAsState()
-            val switching by viewModel.isSwitchingLanguage.collectAsState()
-
-            // While the activity recreates for a language switch, keep a loader on top long
-            // enough to cover the native black gap, then clear the flag so it disappears.
-            LaunchedEffect(switching) {
-                if (switching) {
-                    kotlinx.coroutines.delay(700)
-                    viewModel.clearLanguageSwitching()
-                }
-            }
 
             MyApplicationTheme(darkTheme = darkTheme) {
-                Box(modifier = Modifier.fillMaxSize()) {
                 val navController = rememberNavController()
                 
                 // Ringing screen state overlay
@@ -166,30 +144,6 @@ class MainActivity : ComponentActivity() {
                                 viewModel = viewModel,
                                 onNavigateBack = { navController.navigateUp() }
                             )
-                        }
-                    }
-                }
-
-                    // Full-screen loader drawn above everything while the language switch
-                    // recreate is in flight — replaces the native black flash.
-                    if (switching) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(Color(0xFF0B1020)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                CircularProgressIndicator()
-                                Text(
-                                    text = "Applying language…",
-                                    color = Color.White,
-                                    modifier = Modifier.padding(top = 16.dp)
-                                )
-                            }
                         }
                     }
                 }

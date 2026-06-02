@@ -78,7 +78,7 @@ class LocationHelper(private val context: Context) {
         try {
             val cts = CancellationTokenSource()
             fusedLocationClient.getCurrentLocation(
-                Priority.PRIORITY_HIGH_ACCURACY,
+                Priority.PRIORITY_BALANCED_POWER_ACCURACY,
                 cts.token
             ).addOnSuccessListener { location: Location? ->
                 if (location != null) {

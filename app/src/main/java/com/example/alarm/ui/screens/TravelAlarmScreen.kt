@@ -66,7 +66,6 @@ fun TravelAlarmScreen(
 
     // Local Compose State
     var showAddDialog by remember { mutableStateOf(false) }
-    var editingAlarmId by remember { mutableStateOf<Int?>(null) }
     val isHindi = viewModel.currentLanguage.collectAsStateWithLifecycle().value == "hi"
 
     // Waypoint properties
@@ -353,7 +352,6 @@ fun TravelAlarmScreen(
                             waypointFlash = false
                             searchResults = emptyList()
                             searchQuery = ""
-                            editingAlarmId = null
                             showAddDialog = true
                         },
                         modifier = Modifier
@@ -418,21 +416,6 @@ fun TravelAlarmScreen(
                         alarm = alarm,
                         onToggleActive = { viewModel.toggleTravelAlarmActive(alarm) },
                         onDelete = { viewModel.deleteTravelAlarm(alarm) },
-                        onEdit = {
-                            // Prefill the dialog state from this saved alarm, then open it in edit mode.
-                            waypointLabel = alarm.label
-                            selectedCategory = alarm.category
-                            waypointLat = alarm.latitude.toString()
-                            waypointLng = alarm.longitude.toString()
-                            waypointRadius = alarm.radiusKm.toFloat()
-                            waypointTts = alarm.ttsEnabled
-                            waypointVibration = alarm.vibrationEnabled
-                            waypointFlash = alarm.flashEnabled
-                            searchResults = emptyList()
-                            searchQuery = ""
-                            editingAlarmId = alarm.id
-                            showAddDialog = true
-                        },
                         onUpdateRadius = { radius -> viewModel.updateTravelAlarm(alarm.copy(radiusKm = radius)) },
                         isHindi = isHindi,
                         t = ::t
@@ -468,12 +451,12 @@ fun TravelAlarmScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = if (editingAlarmId != null) t("Edit Travel Alarm", "सफ़र अलार्म बदलें") else t("Create Travel Alarm", "नया सफ़र अलार्म जोड़ें"),
+                                text = t("Create Travel Alarm", "नया सफ़र अलार्म जोड़ें"),
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = SleekActiveText
                             )
-                            IconButton(onClick = { showAddDialog = false; editingAlarmId = null }, modifier = Modifier.size(24.dp)) {
+                            IconButton(onClick = { showAddDialog = false }, modifier = Modifier.size(24.dp)) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "Close",
@@ -853,7 +836,7 @@ fun TravelAlarmScreen(
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             OutlinedButton(
-                                onClick = { showAddDialog = false; editingAlarmId = null },
+                                onClick = { showAddDialog = false },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(12.dp),
                                 border = BorderStroke(1.dp, SleekBorder),
@@ -873,36 +856,19 @@ fun TravelAlarmScreen(
                                         latDouble in -90.0..90.0 && lngDouble in -180.0..180.0
 
                                     if (valid) {
-                                        if (editingAlarmId != null) {
-                                            val alarm = TravelAlarm(
-                                                id = editingAlarmId!!,
-                                                label = labelText,
-                                                category = selectedCategory,
-                                                latitude = latDouble!!,
-                                                longitude = lngDouble!!,
-                                                radiusKm = waypointRadius.toDouble(),
-                                                active = true,
-                                                ttsEnabled = waypointTts,
-                                                flashEnabled = waypointFlash,
-                                                vibrationEnabled = waypointVibration
-                                            )
-                                            viewModel.updateTravelAlarm(alarm)
-                                        } else {
-                                            val alarm = TravelAlarm(
-                                                label = labelText,
-                                                category = selectedCategory,
-                                                latitude = latDouble!!,
-                                                longitude = lngDouble!!,
-                                                radiusKm = waypointRadius.toDouble(),
-                                                active = true,
-                                                ttsEnabled = waypointTts,
-                                                flashEnabled = waypointFlash,
-                                                vibrationEnabled = waypointVibration
-                                            )
-                                            viewModel.insertTravelAlarm(alarm)
-                                        }
+                                        val alarm = TravelAlarm(
+                                            label = labelText,
+                                            category = selectedCategory,
+                                            latitude = latDouble!!,
+                                            longitude = lngDouble!!,
+                                            radiusKm = waypointRadius.toDouble(),
+                                            active = true,
+                                            ttsEnabled = waypointTts,
+                                            flashEnabled = waypointFlash,
+                                            vibrationEnabled = waypointVibration
+                                        )
+                                        viewModel.insertTravelAlarm(alarm)
                                         showAddDialog = false
-                                        editingAlarmId = null
                                     } else {
                                         android.widget.Toast.makeText(
                                             context,
@@ -933,7 +899,6 @@ fun TravelAlarmCard(
     alarm: TravelAlarm,
     onToggleActive: () -> Unit,
     onDelete: () -> Unit,
-    onEdit: () -> Unit,
     onUpdateRadius: (Double) -> Unit,
     isHindi: Boolean,
     t: (String, String) -> String
@@ -992,17 +957,6 @@ fun TravelAlarmCard(
                     ),
                     modifier = Modifier.scale(0.8f)
                 )
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                IconButton(onClick = onEdit, modifier = Modifier.size(24.dp)) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "Edit Waypoint",
-                        tint = SleekPrimary.copy(alpha = 0.8f),
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
 
                 Spacer(modifier = Modifier.width(6.dp))
 

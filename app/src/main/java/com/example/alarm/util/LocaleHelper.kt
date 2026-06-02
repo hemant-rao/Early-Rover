@@ -6,7 +6,7 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.LocaleList
 import androidx.core.os.LocaleListCompat
-import androidx.core.os.LocaleManagerCompat
+import androidx.core.app.LocaleManagerCompat
 import java.util.Locale
 
 /**
@@ -78,16 +78,6 @@ object LocaleHelper {
         val sys: LocaleListCompat = LocaleManagerCompat.getSystemLocales(context)
         for (i in 0 until sys.size()) {
             sys.get(i)?.let { add(it) }
-        }
-
-        // Also pull from the current Configuration's LocaleList, which on many
-        // devices carries the full set of languages the user has configured even
-        // when getSystemLocales() reports only the single active locale.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            val configLocales: LocaleList = context.resources.configuration.locales
-            for (i in 0 until configLocales.size()) {
-                configLocales.get(i)?.let { add(it) }
-            }
         }
         return out
     }

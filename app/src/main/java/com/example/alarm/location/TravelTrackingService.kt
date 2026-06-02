@@ -55,7 +55,6 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         private const val TAG = "TravelTrackingService"
         const val CHANNEL_ID = "TRAVEL_TRACKING_LOCATION_CHANNEL"
         const val NOTIFICATION_ID = 23948
-        const val ACTION_STOP = "com.example.alarm.location.action.STOP"
 
         // Live stats exposed to Compose UI in real-time
         private val _isTracking = MutableStateFlow(false)
@@ -87,25 +86,8 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         }
 
         fun stopService(context: Context) {
-            // Prefer an explicit STOP action so the service can tear down the foreground
-            // notification cleanly before it is destroyed. This avoids leaving a dangling
-            // foreground state that can take down the whole app.
-            try {
-                val stopIntent = Intent(context, TravelTrackingService::class.java).apply {
-                    action = ACTION_STOP
-                }
-                context.startService(stopIntent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed sending STOP action to service", e)
-            }
-
-            // Fallback: ensure the service is stopped even if the STOP action did not land.
-            try {
-                val intent = Intent(context, TravelTrackingService::class.java)
-                context.stopService(intent)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed stopping service via stopService fallback", e)
-            }
+            val intent = Intent(context, TravelTrackingService::class.java)
+            context.stopService(intent)
         }
     }
 
@@ -514,44 +496,21 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "onStartCommand triggered")
-
-        if (intent?.action == ACTION_STOP) {
-            // Explicit stop request from the UI ("STOP ARRIVAL SENTRY"). Tear down every
-            // resource defensively, then remove the foreground notification and stop the
-            // service. Nothing here may throw, or the whole app could be taken down.
-            Log.d(TAG, "ACTION_STOP received - tearing down service")
-            _isTracking.value = false
-            cleanupResources()
-            try {
-                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed removing foreground notification", e)
-            }
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
         return START_STICKY
     }
 
-    // Defensive teardown shared by the explicit STOP action and onDestroy. Every step is
-    // individually guarded, and lateinit fields are only touched once initialized, so an
-    // early/very-fast stop can never crash the process with UninitializedPropertyAccessException.
-    private fun cleanupResources() {
+    override fun onDestroy() {
+        Log.d(TAG, "Service Destroyed")
+        _isTracking.value = false
+        
         try {
-            if (::fusedLocationClient.isInitialized && ::locationCallback.isInitialized) {
-                fusedLocationClient.removeLocationUpdates(locationCallback)
-            }
+            fusedLocationClient.removeLocationUpdates(locationCallback)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed removing location updates", e)
+            e.printStackTrace()
         }
 
-        try {
-            mediaPlayer?.stop()
-            mediaPlayer?.release()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed releasing media player", e)
-        }
+        mediaPlayer?.stop()
+        mediaPlayer?.release()
         mediaPlayer = null
 
         try {
@@ -561,26 +520,11 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         }
         arrivalWakeLock = null
 
-        try {
-            vibrator?.cancel()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed cancelling vibrator", e)
-        }
+        vibrator?.cancel()
 
-        try {
-            textToSpeech?.stop()
-            textToSpeech?.shutdown()
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed shutting down TTS", e)
-        }
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
         textToSpeech = null
-    }
-
-    override fun onDestroy() {
-        Log.d(TAG, "Service Destroyed")
-        _isTracking.value = false
-
-        cleanupResources()
 
         super.onDestroy()
     }

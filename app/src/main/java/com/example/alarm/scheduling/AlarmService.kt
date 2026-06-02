@@ -17,7 +17,9 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
+import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.example.alarm.data.Alarm
 import com.example.alarm.data.AppDatabase
 import kotlinx.coroutines.CoroutineScope
@@ -63,17 +65,50 @@ class AlarmService : Service() {
         }
 
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildForegroundNotification(alarmId, alarmTitle, alarmType))
+        val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+        } else {
+            0
+        }
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION_ID,
+            buildForegroundNotification(alarmId, alarmTitle, alarmType),
+            serviceType
+        )
 
-        playAlarmSound()
+        if (alarmId != -1) {
+            serviceScope.launch {
+                try {
+                    val db = AppDatabase.getDatabase(this@AlarmService)
+                    val alarmObj = db.alarmDao().getAlarmById(alarmId)
+                    playAlarmSound(alarmObj?.ringtoneUri)
+                } catch (e: Exception) {
+                    Log.e("AlarmService", "DB lookup failed for custom ringtone, performing default playback", e)
+                    playAlarmSound(null)
+                }
+            }
+        } else {
+            playAlarmSound(null)
+        }
         startVibration()
 
         return START_STICKY
     }
 
-    private fun playAlarmSound() {
+    private fun playAlarmSound(ringtoneUriString: String?) {
         try {
-            var alarmUri: Uri? = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            var alarmUri: Uri? = null
+            if (!ringtoneUriString.isNullOrEmpty()) {
+                try {
+                    alarmUri = Uri.parse(ringtoneUriString)
+                } catch (e: Exception) {
+                    Log.e("AlarmService", "Failed to parse custom ringtone uri string: $ringtoneUriString", e)
+                }
+            }
+            if (alarmUri == null) {
+                alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            }
             if (alarmUri == null) {
                 alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
             }
@@ -90,14 +125,32 @@ class AlarmService : Service() {
                 start()
             }
         } catch (e: Exception) {
-            Log.e("AlarmService", "Failed to play alarm ringtone", e)
-            // fallback sound
+            Log.e("AlarmService", "Failed to play custom alarm ringtone, trying fallback", e)
             try {
-                mediaPlayer = MediaPlayer.create(this, RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
-                mediaPlayer?.isLooping = true
-                mediaPlayer?.start()
+                val fallbackUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+                mediaPlayer = MediaPlayer().apply {
+                    setDataSource(this@AlarmService, fallbackUri!!)
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ALARM)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    isLooping = true
+                    prepare()
+                    start()
+                }
             } catch (e2: Exception) {
-                Log.e("AlarmService", "Fallback ringtone failed as well", e2)
+                Log.e("AlarmService", "Fallback system default ringtone failed: ", e2)
+                try {
+                    val notifUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    mediaPlayer = MediaPlayer.create(this@AlarmService, notifUri)
+                    mediaPlayer?.isLooping = true
+                    mediaPlayer?.start()
+                } catch (e3: Exception) {
+                    Log.e("AlarmService", "Fallback notification sound failed, alarm muted!", e3)
+                }
             }
         }
     }

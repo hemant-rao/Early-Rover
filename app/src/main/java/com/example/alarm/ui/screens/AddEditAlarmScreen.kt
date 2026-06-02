@@ -25,6 +25,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.media.RingtoneManager
+import android.net.Uri
+import android.os.Build
+import android.content.Context
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import com.example.alarm.data.Alarm
 import com.example.alarm.viewmodel.AlarmViewModel
 import com.example.ui.theme.*
@@ -460,6 +467,100 @@ fun AddEditAlarmScreen(
                 leadingIcon = { Icon(Icons.Default.Label, contentDescription = null, modifier = Modifier.size(18.dp)) }
             )
 
+            // 4.5 ALARM TONE PICKER
+            Text(
+                text = viewModel.translate("Alarm Tone"),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = SleekSecondary,
+                letterSpacing = 1.sp
+            )
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(24.dp))
+                    .testTag("ringtone_picker_card"),
+                shape = RoundedCornerShape(24.dp),
+                colors = CardDefaults.cardColors(containerColor = SleekCardBg)
+            ) {
+                val context = androidx.compose.ui.platform.LocalContext.current
+                val ringtoneName = remember(alarm.ringtoneUri) {
+                    getRingtoneName(context, alarm.ringtoneUri)
+                }
+
+                val ringtonePickerLauncher = rememberLauncherForActivityResult(
+                    contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+                    onResult = { result ->
+                        if (result.resultCode == android.app.Activity.RESULT_OK) {
+                            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI, Uri::class.java)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+                            }
+                            viewModel.editingAlarm.value = alarm.copy(ringtoneUri = uri?.toString() ?: "")
+                        }
+                    }
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, viewModel.translate("Select Alarm Tone"))
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+                                putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+                                if (alarm.ringtoneUri.isNotEmpty()) {
+                                    putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, Uri.parse(alarm.ringtoneUri))
+                                }
+                            }
+                            ringtonePickerLauncher.launch(intent)
+                        }
+                        .padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .background(SleekPrimary.copy(alpha = 0.15f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = null,
+                            tint = SleekPrimary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.width(16.dp))
+                    
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = viewModel.translate("Ringtone"),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = SleekActiveText
+                        )
+                        Text(
+                            text = ringtoneName,
+                            fontSize = 12.sp,
+                            color = SleekMutedText
+                        )
+                    }
+                    
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowRight,
+                        contentDescription = "Select Ringtone",
+                        tint = SleekMutedText,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
             // 5. SMART CONTROLS CARD
             Card(
                 modifier = Modifier
@@ -705,3 +806,15 @@ fun MiStyleTimeWheelSelector(
 }
 
 data class Quad<T1, T2, T3, T4>(val first: T1, val second: T2, val third: T3, val fourth: T4)
+
+fun getRingtoneName(context: Context, uriString: String): String {
+    if (uriString.isEmpty()) return "Default Alarm Sound"
+    return try {
+        val uri = Uri.parse(uriString)
+        val ringtone = RingtoneManager.getRingtone(context, uri)
+        ringtone?.getTitle(context) ?: "Custom Tone"
+    } catch (e: Exception) {
+        "Custom Tone"
+    }
+}
+

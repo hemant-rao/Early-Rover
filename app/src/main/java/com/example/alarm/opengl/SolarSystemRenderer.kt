@@ -12,7 +12,6 @@ import java.time.LocalDateTime
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.cos
-import kotlin.math.hypot
 import kotlin.math.pow
 import kotlin.math.sin
 
@@ -88,18 +87,6 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
     private var startNanos = 0L
     @Volatile private var initError = false
 
-    // ----- picking: viewport + projected screen positions (read from UI thread) -----
-    @Volatile var viewportW = 0
-    @Volatile var viewportH = 0
-    /** [Sun, Mercury..Neptune] each as (px, py); -1f means off-screen / behind camera. */
-    @Volatile private var screenPos: FloatArray = FloatArray(9 * 2) { -1f }
-    val bodyNames = listOf("Sun", "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune")
-
-    // scratch matrices/vectors for screen projection (GL thread only)
-    private val projView = FloatArray(16)
-    private val pickIn = FloatArray(4)
-    private val pickOut = FloatArray(4)
-
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         try {
             GLES20.glClearColor(0f, 0f, 0f, 0f) // transparent — Compose paints the sky behind
@@ -129,8 +116,6 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
         if (initError) return
         try {
             GLES20.glViewport(0, 0, width, height)
-            viewportW = width
-            viewportH = height
             val aspect = width.toFloat() / height.coerceAtLeast(1)
             Matrix.perspectiveM(projection, 0, 42f, aspect, 0.5f, 200f)
         } catch (e: Exception) {
@@ -156,12 +141,6 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
             // Camera basis (rows of the view rotation) for billboards.
             val rightX = view[0]; val rightY = view[4]; val rightZ = view[8]
             val upX = view[1]; val upY = view[5]; val upZ = view[9]
-
-            // Combined projection*view for projecting body world positions to screen pixels.
-            Matrix.multiplyMM(projView, 0, projection, 0, view, 0)
-            // Local buffer filled this frame: index 0 = Sun, 1..8 = planets (PLANETS order).
-            val sp = FloatArray(9 * 2) { -1f }
-            projectToScreen(0f, 0f, 0f)?.let { sp[0] = it[0]; sp[1] = it[1] }
 
             // --- starfield (far, depth write off) ---
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
@@ -201,9 +180,6 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
                 val x = p.orbit * cos(ang)
                 val z = p.orbit * sin(ang)
 
-                // Project this planet's world centre to screen pixels for tap picking.
-                projectToScreen(x, 0f, z)?.let { sp[(i + 1) * 2] = it[0]; sp[(i + 1) * 2 + 1] = it[1] }
-
                 Matrix.setIdentityM(model, 0)
                 Matrix.translateM(model, 0, x, 0f, z)
                 // slow axial spin for life (not orbital motion)
@@ -233,55 +209,9 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
                     drawSaturnRing(x, z, t)
                 }
             }
-
-            // Publish this frame's projected screen positions for UI-thread tap picking.
-            screenPos = sp
         } catch (e: Exception) {
             android.util.Log.e("SolarSystemRenderer", "Frame composition failed gracefully: ", e)
         }
-    }
-
-    /**
-     * Project a world-space point to screen pixels using projection*view.
-     * Returns [px, py] (a fresh 2-element array) or null if the point is behind the
-     * camera (clip w <= 0). GL thread only (reuses [pickIn]/[pickOut]).
-     */
-    private fun projectToScreen(wx: Float, wy: Float, wz: Float): FloatArray? {
-        pickIn[0] = wx; pickIn[1] = wy; pickIn[2] = wz; pickIn[3] = 1f
-        Matrix.multiplyMV(pickOut, 0, projView, 0, pickIn, 0)
-        val w = pickOut[3]
-        if (w <= 0f) return null
-        val ndcX = pickOut[0] / w
-        val ndcY = pickOut[1] / w
-        val px = (ndcX * 0.5f + 0.5f) * viewportW
-        val py = (1f - (ndcY * 0.5f + 0.5f)) * viewportH
-        return floatArrayOf(px, py)
-    }
-
-    /**
-     * Hit-test a screen tap against the most recently projected body positions.
-     * Callable from the UI thread (reads volatile [screenPos]/[viewportW]/[viewportH]).
-     * Returns the nearest body name within the touch threshold, or null.
-     */
-    fun pickBody(px: Float, py: Float): String? {
-        val sp = screenPos
-        val w = viewportW
-        val h = viewportH
-        if (w <= 0 || h <= 0) return null
-        val threshold = (kotlin.math.max(w, h) * 0.07f).coerceAtLeast(60f)
-        var bestIdx = -1
-        var bestDist = threshold
-        for (i in bodyNames.indices) {
-            val sx = sp[i * 2]
-            val sy = sp[i * 2 + 1]
-            if (sx == -1f && sy == -1f) continue // off-screen / behind camera sentinel
-            val d = hypot(px - sx, py - sy)
-            if (d <= bestDist) {
-                bestDist = d
-                bestIdx = i
-            }
-        }
-        return if (bestIdx >= 0) bodyNames[bestIdx] else null
     }
 
     /**
