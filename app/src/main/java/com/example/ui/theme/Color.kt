@@ -8,8 +8,8 @@ import androidx.compose.ui.graphics.Color
 val SleekDarkBackground = Color(0xFF0D0F14)
 val SleekDarkCardBg = Color(0xFF1C1F26)
 val SleekDarkBorder = Color(0xFF2D313D)
-val SleekDarkPrimary = Color(0xFF7A66F9)   // Gemini Purple
-val SleekDarkSecondary = Color(0xFF4B90FA) // Gemini Blue
+val SleekDarkPrimary = Color(0xFF3287FE)
+val SleekDarkSecondary = Color(0xFF1EC9E8)
 val SleekDarkMutedText = Color(0xFF9BA1B0)
 val SleekDarkActiveText = Color(0xFFE2E2E6)
 
@@ -17,8 +17,8 @@ val SleekDarkActiveText = Color(0xFFE2E2E6)
 val SleekLightBackground = Color(0xFFF8FAFC)
 val SleekLightCardBg = Color(0xFFFFFFFF)
 val SleekLightBorder = Color(0xFFE2E8F0)
-val SleekLightPrimary = Color(0xFF6366F1)   // Gemini Deep Purple
-val SleekLightSecondary = Color(0xFF3B82F6) // Gemini Deep Blue
+val SleekLightPrimary = Color(0xFF3287FE)
+val SleekLightSecondary = Color(0xFF0EA5E9)
 val SleekLightMutedText = Color(0xFF64748B)
 val SleekLightActiveText = Color(0xFF0F172A)
 

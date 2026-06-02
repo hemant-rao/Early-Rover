@@ -70,6 +70,274 @@ class LocationHelper(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
+    private fun getSystemLocationFallback(
+        onSuccess: (lat: Double, lng: Double, timezoneOffset: Double, name: String) -> Unit,
+        onFailure: (Exception) -> Unit
+    ) {
+        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+        if (locationManager != null) {
+            try {
+                // Try GPS Provider first for exact location
+                val gpsLocation = if (locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)) {
+                    locationManager.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+                } else null
+
+                // Try Network Provider if GPS is null
+                val networkLocation = if (gpsLocation == null && locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)) {
+                    locationManager.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+                } else null
+
+                val finalLoc = gpsLocation ?: networkLocation
+                if (finalLoc != null) {
+                    processLocation(finalLoc, onSuccess, onFailure)
+                } else {
+                    // Try to request a single update via LocationManager if both last locations are null
+                    val provider = if (locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)) {
+                        android.location.LocationManager.GPS_PROVIDER
+                    } else if (locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)) {
+                        android.location.LocationManager.NETWORK_PROVIDER
+                    } else {
+                        null
+                    }
+
+                    if (provider != null) {
+                        locationManager.requestSingleUpdate(provider, object : android.location.LocationListener {
+                            override fun onLocationChanged(location: Location) {
+                                processLocation(location, onSuccess, onFailure)
+                            }
+                            @Deprecated("Deprecated in Java")
+                            override fun onStatusChanged(p0: String?, p1: Int, p2: android.os.Bundle?) {}
+                            override fun onProviderEnabled(p0: String) {}
+                            override fun onProviderDisabled(p0: String) {}
+                        }, android.os.Looper.getMainLooper())
+                    } else {
+                        // Dynamic IP Geolocation fallback as a final failsafe if no LocationManager providers are active
+                        fetchIPLocationFallback(onSuccess, onFailure)
+                    }
+                }
+            } catch (e: Exception) {
+                fetchIPLocationFallback(onSuccess, onFailure)
+            }
+        } else {
+            fetchIPLocationFallback(onSuccess, onFailure)
+        }
+    }
+
+    private fun fetchIPLocationFallback(
+        onSuccess: (lat: Double, lng: Double, timezoneOffset: Double, name: String) -> Unit,
+        onFailure: (Exception) -> Unit
+    ) {
+        Thread {
+            try {
+                val url = URL("https://ipapi.co/json/")
+                val connection = url.openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 3000
+                connection.readTimeout = 3000
+                connection.setRequestProperty("User-Agent", "SolarAlarmApp")
+                
+                val responseCode = connection.responseCode
+                if (responseCode == HttpURLConnection.HTTP_OK) {
+                    val reader = BufferedReader(InputStreamReader(connection.inputStream))
+                    val response = StringBuilder()
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        response.append(line)
+                    }
+                    reader.close()
+                    
+                    val json = JSONObject(response.toString())
+                    val lat = json.optDouble("latitude", 0.0)
+                    val lng = json.optDouble("longitude", 0.0)
+                    val city = json.optString("city", "")
+                    val country = json.optString("country_code", "")
+                    val utcOffsetStr = json.optString("utc_offset", "+0000")
+                    
+                    var timezoneOffset = 0.0
+                    try {
+                        if (utcOffsetStr.isNotEmpty() && (utcOffsetStr.startsWith("+") || utcOffsetStr.startsWith("-")) && utcOffsetStr.length >= 5) {
+                            val sign = if (utcOffsetStr[0] == '-') -1.0 else 1.0
+                            val hours = utcOffsetStr.substring(1, 3).toDoubleOrNull() ?: 0.0
+                            val mins = utcOffsetStr.substring(3, 5).toDoubleOrNull() ?: 0.0
+                            timezoneOffset = sign * (hours + mins / 60.0)
+                        } else {
+                            timezoneOffset = Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
+                        }
+                    } catch (e: Exception) {
+                        timezoneOffset = Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
+                    }
+                    
+                    val name = if (city.isNotEmpty() && country.isNotEmpty()) {
+                        "$city, $country"
+                    } else if (city.isNotEmpty()) {
+                        city
+                    } else {
+                        "Auto IP Location"
+                    }
+                    
+                    if (lat != 0.0 || lng != 0.0) {
+                        saveLocation(lat, lng, timezoneOffset, name)
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            onSuccess(lat, lng, timezoneOffset, name)
+                        }
+                        return@Thread
+                    }
+                }
+                throw Exception("IP Geolocation API response not valid")
+            } catch (e: Exception) {
+                // Secondary fallback API: ip-api
+                try {
+                    val url2 = URL("http://ip-api.com/json")
+                    val connection2 = url2.openConnection() as HttpURLConnection
+                    connection2.requestMethod = "GET"
+                    connection2.connectTimeout = 3000
+                    connection2.readTimeout = 3000
+                    
+                    val rCode = connection2.responseCode
+                    if (rCode == HttpURLConnection.HTTP_OK) {
+                        val reader2 = BufferedReader(InputStreamReader(connection2.inputStream))
+                        val response2 = StringBuilder()
+                        var line2: String?
+                        while (reader2.readLine().also { line2 = it } != null) {
+                            response2.append(line2)
+                        }
+                        reader2.close()
+                        
+                        val json2 = JSONObject(response2.toString())
+                        if (json2.optString("status") == "success") {
+                            val lat = json2.optDouble("lat", 0.0)
+                            val lng = json2.optDouble("lon", 0.0)
+                            val city = json2.optString("city", "")
+                            val country = json2.optString("countryCode", "")
+                            
+                            val timezoneOffset = Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
+                            val name = if (city.isNotEmpty() && country.isNotEmpty()) {
+                                "$city, $country"
+                            } else if (city.isNotEmpty()) {
+                                city
+                            } else {
+                                "Auto Network Location"
+                            }
+                            
+                            if (lat != 0.0 || lng != 0.0) {
+                                saveLocation(lat, lng, timezoneOffset, name)
+                                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                    onSuccess(lat, lng, timezoneOffset, name)
+                                }
+                                return@Thread
+                            }
+                        }
+                    }
+                } catch (pe: Exception) {
+                    pe.printStackTrace()
+                }
+                
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    onFailure(e)
+                }
+            }
+        }.start()
+    }
+
+    private fun processLocation(
+        location: Location,
+        onSuccess: (lat: Double, lng: Double, timezoneOffset: Double, name: String) -> Unit,
+        onFailure: (Exception) -> Unit
+    ) {
+        val lat = location.latitude
+        val lng = location.longitude
+        
+        // Simple timezone offset formula based on longitude (15 degrees = 1 hour)
+        val rawTzOffset = Math.round(lng / 15.0).toDouble()
+        val roundedTzOffset = Math.max(-12.0, Math.min(14.0, rawTzOffset))
+        
+        // Run blocking reverse geocoding on a background thread to prevent NetworkOnMainThreadException
+        Thread {
+            var detectedName = ""
+            try {
+                if (android.location.Geocoder.isPresent()) {
+                    val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
+                    @Suppress("DEPRECATION")
+                    val addresses = geocoder.getFromLocation(lat, lng, 1)
+                    if (!addresses.isNullOrEmpty()) {
+                        val address = addresses[0]
+                        val city = address.locality ?: address.subAdminArea ?: address.adminArea ?: address.thoroughfare ?: ""
+                        val country = address.countryCode ?: address.countryName ?: ""
+                        detectedName = if (city.isNotEmpty() && country.isNotEmpty()) {
+                            "$city, $country"
+                        } else if (city.isNotEmpty()) {
+                            city
+                        } else if (address.countryName != null) {
+                            address.countryName
+                        } else {
+                            ""
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+
+            // Fallback to OSM Nominatim reverse geocoding if local geocoder returned nothing
+            if (detectedName.isEmpty()) {
+                try {
+                    val url = URL("https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json&accept-language=en")
+                    val connection = url.openConnection() as HttpURLConnection
+                    connection.requestMethod = "GET"
+                    connection.connectTimeout = 4000
+                    connection.readTimeout = 4000
+                    connection.setRequestProperty("User-Agent", "SolariAlarmApp")
+                    
+                    val responseCode = connection.responseCode
+                    if (responseCode == HttpURLConnection.HTTP_OK) {
+                        val reader = BufferedReader(InputStreamReader(connection.inputStream))
+                        val response = StringBuilder()
+                        var line: String?
+                        while (reader.readLine().also { line = it } != null) {
+                            response.append(line)
+                        }
+                        reader.close()
+                        
+                        val jsonObject = JSONObject(response.toString())
+                        if (jsonObject.has("address")) {
+                            val addrObj = jsonObject.getJSONObject("address")
+                            val city = addrObj.optString("city", "")
+                                .ifEmpty { addrObj.optString("town", "") }
+                                .ifEmpty { addrObj.optString("village", "") }
+                                .ifEmpty { addrObj.optString("suburb", "") }
+                                .ifEmpty { addrObj.optString("hamlet", "") }
+                                .ifEmpty { addrObj.optString("county", "") }
+                            val country = addrObj.optString("country_code", "").uppercase().ifEmpty {
+                                addrObj.optString("country", "")
+                            }
+                            
+                            detectedName = if (city.isNotEmpty() && country.isNotEmpty()) {
+                                "$city, $country"
+                            } else if (city.isNotEmpty()) {
+                                city
+                            } else {
+                                country
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            if (detectedName.isEmpty()) {
+                detectedName = String.format(java.util.Locale.US, "GPS: %.4f, %.4f", lat, lng)
+            }
+            
+            saveLocation(lat, lng, roundedTzOffset, detectedName)
+            
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                onSuccess(lat, lng, roundedTzOffset, detectedName)
+            }
+        }.start()
+    }
+
+    @SuppressLint("MissingPermission")
     fun requestCurrentLocation(
         onSuccess: (lat: Double, lng: Double, timezoneOffset: Double, name: String) -> Unit,
         onFailure: (Exception) -> Unit
@@ -82,102 +350,23 @@ class LocationHelper(private val context: Context) {
                 cts.token
             ).addOnSuccessListener { location: Location? ->
                 if (location != null) {
-                    val lat = location.latitude
-                    val lng = location.longitude
-                    
-                    // Simple timezone offset formula based on longitude (15 degrees = 1 hour)
-                    val rawTzOffset = Math.round(lng / 15.0).toDouble()
-                    val roundedTzOffset = Math.max(-12.0, Math.min(14.0, rawTzOffset))
-                    
-                    // Run blocking reverse geocoding on a background thread to prevent NetworkOnMainThreadException
-                    Thread {
-                        var detectedName = ""
-                        try {
-                            if (android.location.Geocoder.isPresent()) {
-                                val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
-                                @Suppress("DEPRECATION")
-                                val addresses = geocoder.getFromLocation(lat, lng, 1)
-                                if (!addresses.isNullOrEmpty()) {
-                                    val address = addresses[0]
-                                    val city = address.locality ?: address.subAdminArea ?: address.adminArea ?: address.thoroughfare ?: ""
-                                    val country = address.countryCode ?: address.countryName ?: ""
-                                    detectedName = if (city.isNotEmpty() && country.isNotEmpty()) {
-                                        "$city, $country"
-                                    } else if (city.isNotEmpty()) {
-                                        city
-                                    } else if (address.countryName != null) {
-                                        address.countryName
-                                    } else {
-                                        ""
-                                    }
-                                }
-                            }
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-
-                        // Fallback to OSM Nominatim reverse geocoding if local geocoder returned nothing
-                        if (detectedName.isEmpty()) {
-                            try {
-                                val url = URL("https://nominatim.openstreetmap.org/reverse?lat=$lat&lon=$lng&format=json&accept-language=en")
-                                val connection = url.openConnection() as HttpURLConnection
-                                connection.requestMethod = "GET"
-                                connection.connectTimeout = 4000
-                                connection.readTimeout = 4000
-                                connection.setRequestProperty("User-Agent", "SolariAlarmApp")
-                                
-                                val responseCode = connection.responseCode
-                                if (responseCode == HttpURLConnection.HTTP_OK) {
-                                    val reader = BufferedReader(InputStreamReader(connection.inputStream))
-                                    val response = StringBuilder()
-                                    var line: String?
-                                    while (reader.readLine().also { line = it } != null) {
-                                        response.append(line)
-                                    }
-                                    reader.close()
-                                    
-                                    val jsonObject = JSONObject(response.toString())
-                                    if (jsonObject.has("address")) {
-                                        val addrObj = jsonObject.getJSONObject("address")
-                                        val city = addrObj.optString("city", "")
-                                            .ifEmpty { addrObj.optString("town", "") }
-                                            .ifEmpty { addrObj.optString("village", "") }
-                                            .ifEmpty { addrObj.optString("suburb", "") }
-                                            .ifEmpty { addrObj.optString("hamlet", "") }
-                                            .ifEmpty { addrObj.optString("county", "") }
-                                        val country = addrObj.optString("country_code", "").uppercase().ifEmpty {
-                                            addrObj.optString("country", "")
-                                        }
-                                        
-                                        detectedName = if (city.isNotEmpty() && country.isNotEmpty()) {
-                                            "$city, $country"
-                                        } else if (city.isNotEmpty()) {
-                                            city
-                                        } else {
-                                            country
-                                        }
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                e.printStackTrace()
-                            }
-                        }
-
-                        if (detectedName.isEmpty()) {
-                            detectedName = String.format(java.util.Locale.US, "GPS: %.4f, %.4f", lat, lng)
-                        }
-                        
-                        saveLocation(lat, lng, roundedTzOffset, detectedName)
-                        
-                        android.os.Handler(android.os.Looper.getMainLooper()).post {
-                            onSuccess(lat, lng, roundedTzOffset, detectedName)
-                        }
-                    }.start()
+                    processLocation(location, onSuccess, onFailure)
                 } else {
-                    onFailure(Exception("GPS location returned null"))
+                    // Fallback to Fused Location lastLocation
+                    fusedLocationClient.lastLocation.addOnSuccessListener { lastLoc: Location? ->
+                        if (lastLoc != null) {
+                            processLocation(lastLoc, onSuccess, onFailure)
+                        } else {
+                            // Fallback to native LocationManager (GPS/Network)
+                            getSystemLocationFallback(onSuccess, onFailure)
+                        }
+                    }.addOnFailureListener {
+                        getSystemLocationFallback(onSuccess, onFailure)
+                    }
                 }
             }.addOnFailureListener { exception ->
-                onFailure(exception)
+                // Fallback to native LocationManager (GPS/Network)
+                getSystemLocationFallback(onSuccess, onFailure)
             }
         } catch (e: SecurityException) {
             onFailure(e)

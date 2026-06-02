@@ -1,5 +1,6 @@
 package com.example.alarm.data
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -15,5 +16,8 @@ data class TravelAlarm(
     val ttsEnabled: Boolean = true,
     val flashEnabled: Boolean = false,
     val vibrationEnabled: Boolean = true,
+    @ColumnInfo(defaultValue = "My Location") val startLabel: String = "My Location",
+    val startLatitude: Double? = null,
+    val startLongitude: Double? = null,
     val createdAt: Long = System.currentTimeMillis()
 )

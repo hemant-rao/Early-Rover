@@ -20,7 +20,14 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
     /** true -> planets visibly orbit; false -> hold the exact real-time position. */
     var animateOrbits: Boolean
         get() = renderer.animateOrbits
-        set(value) { renderer.animateOrbits = value }
+        set(value) {
+            renderer.animateOrbits = value
+            if (value) {
+                startRenderLoop()
+            } else {
+                stopRenderLoop()
+            }
+        }
 
     /** Invoked (on the main thread) with a body name when one is tapped. */
     var onBodyTap: ((String) -> Unit)? = null
@@ -37,6 +44,30 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
 
     private val ticker = Runnable { refreshAndScheduleNext() }
 
+    private var isRenderingActive = false
+
+    private val renderTicker = object : Runnable {
+        override fun run() {
+            if (isRenderingActive && animateOrbits) {
+                requestRender()
+                postDelayed(this, 50L) // Peaceful ~20 FPS when animating
+            }
+        }
+    }
+
+    private fun startRenderLoop() {
+        if (!isRenderingActive) {
+            isRenderingActive = true
+            removeCallbacks(renderTicker)
+            post(renderTicker)
+        }
+    }
+
+    private fun stopRenderLoop() {
+        isRenderingActive = false
+        removeCallbacks(renderTicker)
+    }
+
     init {
         setEGLContextClientVersion(2)
         // Transparent surface so the animated weather sky shows through behind it.
@@ -44,25 +75,41 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
         holder.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
         setZOrderOnTop(true)
         setRenderer(renderer)
-        renderMode = RENDERMODE_CONTINUOUSLY
+        renderMode = RENDERMODE_WHEN_DIRTY
         renderer.updatePositions(LocalDateTime.now())
     }
 
     private fun refreshAndScheduleNext() {
         renderer.updatePositions(LocalDateTime.now())
+        removeCallbacks(ticker)
         postDelayed(ticker, 60_000L)
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        onResume()
+        if (animateOrbits) {
+            startRenderLoop()
+        }
+        removeCallbacks(ticker)
         postDelayed(ticker, 60_000L)
     }
 
     override fun onDetachedFromWindow() {
         removeCallbacks(ticker)
-        onPause()
+        stopRenderLoop()
         super.onDetachedFromWindow()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (animateOrbits) {
+            startRenderLoop()
+        }
+    }
+
+    override fun onPause() {
+        stopRenderLoop()
+        super.onPause()
     }
 
     private fun requestDisallowIntercept(disallow: Boolean) {
@@ -129,6 +176,7 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
                 mode = NONE
             }
         }
+        requestRender()
         return true
     }
 

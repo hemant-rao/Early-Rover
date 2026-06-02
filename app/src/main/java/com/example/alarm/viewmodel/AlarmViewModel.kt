@@ -231,9 +231,32 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "Default Alarm Sound" to "डिफ़ॉल्ट अलार्म ध्वनि"
     )
 
+    // --- TRAVEL / DESTINATION ARRIVAL ALARM SYSTEMS (Declared early to avoid initialization NPE in init) ---
+    val allTravelAlarms: StateFlow<List<TravelAlarm>> = repository.allTravelAlarms
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // Companion tracking fields bound directly to services
+    val isTravelTrackingActive = TravelTrackingService.isTracking
+    val travelCurrentLocation = TravelTrackingService.currentLocation
+    val travelStartLocation = TravelTrackingService.startLocation
+    val travelTotalTripDistance = TravelTrackingService.totalTripDistanceKm
+    val travelNearestAlarm = TravelTrackingService.nearestAlarm
+    val travelDistanceToNearest = TravelTrackingService.distanceToNearestKm
+    val travelStatusMsg = TravelTrackingService.statusMessage
+    val travelCurrentSpeed = TravelTrackingService.currentSpeedKmh
+
     init {
         recomputeSunTimes()
         observeAlarmsForUpcoming()
+
+        // Auto-stop travel tracking service if there are no travel alarms remaining
+        viewModelScope.launch {
+            allTravelAlarms.collect { list ->
+                if (list.isEmpty() && isTravelTrackingActive.value) {
+                    stopTravelTracking()
+                }
+            }
+        }
 
         // Initialize saved location cities database
         val savedStr = settingsPrefs.getString("saved_cities_list", "") ?: ""
@@ -582,10 +605,6 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- TRAVEL / DESTINATION ARRIVAL ALARM SYSTEMS ---
-    val allTravelAlarms: StateFlow<List<TravelAlarm>> = repository.allTravelAlarms
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
     fun insertTravelAlarm(alarm: TravelAlarm) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.insertTravelAlarm(alarm)
@@ -601,6 +620,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteTravelAlarm(alarm: TravelAlarm) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.deleteTravelAlarm(alarm)
+            if (TravelTrackingService.nearestAlarm.value?.id == alarm.id) {
+                TravelTrackingService.clearNearestAlarm()
+            }
         }
     }
 
@@ -611,14 +633,6 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     
-    // Companion tracking fields bound directly to services
-    val isTravelTrackingActive = TravelTrackingService.isTracking
-    val travelCurrentLocation = TravelTrackingService.currentLocation
-    val travelNearestAlarm = TravelTrackingService.nearestAlarm
-    val travelDistanceToNearest = TravelTrackingService.distanceToNearestKm
-    val travelStatusMsg = TravelTrackingService.statusMessage
-    val travelCurrentSpeed = TravelTrackingService.currentSpeedKmh
-
     fun startTravelTracking() {
         val context = getApplication<Application>()
         TravelTrackingService.startService(context)

@@ -11,9 +11,9 @@ android {
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.sunalarm.pzhkrm"
+    applicationId = "com.aistudio.sunalarm.pzhkrm2"
     minSdk = 24
-    targetSdk = 36
+    targetSdk = 35
     versionCode = 1
     versionName = "1.0"
 

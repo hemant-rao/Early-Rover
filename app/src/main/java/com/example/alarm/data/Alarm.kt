@@ -18,6 +18,7 @@ data class Alarm(
     val snoozeMinutes: Int = 5,
     val volume: Int = 80,
     val ringtoneUri: String = "", // empty for default alarm sound
+    val ringAtExactAlso: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {

@@ -93,8 +93,20 @@ class MainActivity : ComponentActivity() {
                     AlarmRingScreen(
                         title = ringingState!!.title,
                         type = ringingState!!.type,
-                        onDismiss = { viewModel.stopRingingAlarmAndDismiss() },
-                        onSnooze = { viewModel.stopRingingAlarmAndSnooze() }
+                        onDismiss = {
+                            val isTravel = ringingState!!.type == "TRAVEL" || (ringingState!!.id >= 500000)
+                            viewModel.stopRingingAlarmAndDismiss()
+                            if (isTravel) {
+                                pendingNavDestination.value = "travel"
+                            }
+                        },
+                        onSnooze = {
+                            val isTravel = ringingState!!.type == "TRAVEL" || (ringingState!!.id >= 500000)
+                            viewModel.stopRingingAlarmAndSnooze()
+                            if (isTravel) {
+                                pendingNavDestination.value = "travel"
+                            }
+                        }
                     )
                 } else {
                     NavHost(
@@ -131,7 +143,17 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onNavigateToSettings = {
                                     navController.navigate("settings")
+                                },
+                                onNavigateToManageCities = {
+                                    navController.navigate("manage_cities")
                                 }
+                            )
+                        }
+
+                        composable("manage_cities") {
+                            ManageCitiesScreen(
+                                viewModel = viewModel,
+                                onNavigateBack = { navController.navigateUp() }
                             )
                         }
 

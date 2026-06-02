@@ -20,30 +20,66 @@ class AlarmScheduler(private val context: Context) {
         }
 
         val targetCal = getNextOccurrence(alarm)
-        val intent = Intent(context, AlarmReceiver::class.java).apply {
+        val intentOffset = Intent(context, AlarmReceiver::class.java).apply {
             putExtra("ALARM_ID", alarm.id)
             putExtra("ALARM_TITLE", alarm.title)
             putExtra("ALARM_TYPE", alarm.alarmType)
         }
-
-        // Must be unique for each alarm to prevent overwriting
-        val pendingIntent = PendingIntent.getBroadcast(
+        val pendingIntentOffset = PendingIntent.getBroadcast(
             context,
             alarm.id,
-            intent,
+            intentOffset,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        
+        schedulePendingIntent(targetCal.timeInMillis, pendingIntentOffset, alarm.id)
+        
+        // Also schedule exact time if requested and offset is present
+        if (alarm.ringAtExactAlso && alarm.offsetMinutes != 0 && (alarm.alarmType == "SUNRISE" || alarm.alarmType == "SUNSET")) {
+            val targetCalExact = targetCal.clone() as Calendar
+            targetCalExact.add(Calendar.MINUTE, -alarm.offsetMinutes) // revert the offset
+            
+            val intentExact = Intent(context, AlarmReceiver::class.java).apply {
+                putExtra("ALARM_ID", alarm.id)
+                putExtra("ALARM_TITLE", alarm.title.ifEmpty { if (alarm.alarmType == "SUNRISE") "Sunrise Exact" else "Sunset Exact" })
+                putExtra("ALARM_TYPE", alarm.alarmType)
+                putExtra("IS_EXACT_ALSO", true)
+            }
+            // Use negative ID to distinguish pending intent
+            val exactReqId = -alarm.id 
+            val pendingIntentExact = PendingIntent.getBroadcast(
+                context,
+                exactReqId,
+                intentExact,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            
+            schedulePendingIntent(targetCalExact.timeInMillis, pendingIntentExact, exactReqId)
+        } else {
+            // Cancel any old exact also alarm if it was unchecked
+            val exactReqId = -alarm.id
+            val intentExact = Intent(context, AlarmReceiver::class.java)
+            val pendingOld = PendingIntent.getBroadcast(
+                context,
+                exactReqId,
+                intentExact,
+                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+            )
+            if (pendingOld != null) {
+                alarmManager.cancel(pendingOld)
+                pendingOld.cancel()
+            }
+        }
+    }
 
-        val triggerTime = targetCal.timeInMillis
-
-        // Use standard AlarmClockInfo to ensure reliable firing even during Doze/Standby
+    private fun schedulePendingIntent(triggerTime: Long, pendingIntent: PendingIntent, reqId: Int) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             val showIntent = Intent(context, Class.forName("com.example.MainActivity")).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
             }
             val showPendingIntent = PendingIntent.getActivity(
                 context,
-                alarm.id,
+                reqId,
                 showIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -51,9 +87,8 @@ class AlarmScheduler(private val context: Context) {
             val info = AlarmManager.AlarmClockInfo(triggerTime, showPendingIntent)
             try {
                 alarmManager.setAlarmClock(info, pendingIntent)
-                Log.d("AlarmScheduler", "Alarm scheduled for ${targetCal.time} with id: ${alarm.id}")
+                Log.d("AlarmScheduler", "Alarm scheduled for triggerTime $triggerTime with reqId: $reqId")
             } catch (e: SecurityException) {
-                // Fallback if SCHEDULE_EXACT_ALARM is missing
                 scheduleFallback(triggerTime, pendingIntent)
             }
         } else {
@@ -70,17 +105,29 @@ class AlarmScheduler(private val context: Context) {
     }
 
     fun cancel(alarm: Alarm) {
-        val intent = Intent(context, AlarmReceiver::class.java)
-        val pendingIntent = PendingIntent.getBroadcast(
+        val intentOffset = Intent(context, AlarmReceiver::class.java)
+        val pendingIntentOffset = PendingIntent.getBroadcast(
             context,
             alarm.id,
-            intent,
+            intentOffset,
             PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
         )
-        if (pendingIntent != null) {
-            alarmManager.cancel(pendingIntent)
-            pendingIntent.cancel()
+        if (pendingIntentOffset != null) {
+            alarmManager.cancel(pendingIntentOffset)
+            pendingIntentOffset.cancel()
             Log.d("AlarmScheduler", "Alarm canceled with id: ${alarm.id}")
+        }
+        
+        val intentExact = Intent(context, AlarmReceiver::class.java)
+        val pendingIntentExact = PendingIntent.getBroadcast(
+            context,
+            -alarm.id,
+            intentExact,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        )
+        if (pendingIntentExact != null) {
+            alarmManager.cancel(pendingIntentExact)
+            pendingIntentExact.cancel()
         }
     }
 

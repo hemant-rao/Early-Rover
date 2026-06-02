@@ -23,7 +23,7 @@ class GreetingScreenshotTest {
   fun greeting_screenshot() {
     composeTestRule.setContent { 
       MyApplicationTheme { 
-        androidx.compose.material3.Text("Hello Solaris") 
+        androidx.compose.material3.Text("Hello Solar Alarm") 
       } 
     }
 

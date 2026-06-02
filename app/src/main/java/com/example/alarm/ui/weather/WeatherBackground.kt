@@ -32,10 +32,11 @@ import kotlin.math.sin
 @Composable
 fun WeatherBackground(
     weather: WeatherInfo?,
+    isDayOverride: Boolean? = null,
     modifier: Modifier = Modifier
 ) {
     val condition = weather?.condition ?: WeatherCondition.CLEAR
-    val isDay = weather?.isDay ?: (LocalTime.now().hour in 6..17)
+    val isDay = isDayOverride ?: weather?.isDay ?: (LocalTime.now().hour in 6..17)
 
     val transition = rememberInfiniteTransition(label = "weather")
     // Continuous phase 0..1 (periodic) for falling particles and ray rotation.
@@ -153,8 +154,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMoon() {
         radius = r * 3f, center = center
     )
     drawCircle(Color(0xFFE8ECF5), radius = r, center = center)
-    // crescent shadow
-    drawCircle(Color(0xFF12203A), radius = r, center = Offset(center.x + r * 0.6f, center.y - r * 0.3f))
+    // crescent shadow blended with night sky
+    drawCircle(Color(0xFF0A1230), radius = r, center = Offset(center.x + r * 0.6f, center.y - r * 0.3f))
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawClouds(
@@ -171,7 +172,6 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawClouds(
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawCloud(c: Offset, s: Float, color: Color) {
-    // Fluffy, rounded cloud built from overlapping soft puffs (no hard rectangle base).
     // dx, dy are offsets in units of s; rad is the puff radius in units of s.
     val puffs = arrayOf(
         floatArrayOf(0.00f, 0.06f, 0.50f),
@@ -184,12 +184,42 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawCloud(c: Offset
         floatArrayOf(0.02f, -0.26f, 0.34f)
     )
     for (p in puffs) {
-        drawCircle(color, radius = s * p[2], center = Offset(c.x + p[0] * s, c.y + p[1] * s))
+        val centerPoint = Offset(c.x + p[0] * s, c.y + p[1] * s)
+        val puffRadius = s * p[2]
+        drawCircle(
+            brush = Brush.radialGradient(
+                colors = listOf(color, color.copy(alpha = 0.85f), color.copy(alpha = 0.4f), Color.Transparent),
+                center = centerPoint,
+                radius = puffRadius
+            ),
+            radius = puffRadius,
+            center = centerPoint
+        )
     }
-    // Soft brighter highlight along the top for a sunlit, voluminous feel.
-    val hi = color.copy(alpha = (color.alpha * 0.5f).coerceIn(0f, 1f))
-    drawCircle(hi, radius = s * 0.30f, center = Offset(c.x - 0.20f * s, c.y - 0.18f * s))
-    drawCircle(hi, radius = s * 0.26f, center = Offset(c.x + 0.30f * s, c.y - 0.20f * s))
+    // Soft brighter highlights along the top for a sunlit, volumetric feel.
+    val hi = color.copy(alpha = (color.alpha * 0.4f).coerceIn(0f, 1f))
+    val hiCenter1 = Offset(c.x - 0.20f * s, c.y - 0.18f * s)
+    val hiRadius1 = s * 0.30f
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(hi, hi.copy(alpha = 0.15f), Color.Transparent),
+            center = hiCenter1,
+            radius = hiRadius1
+        ),
+        radius = hiRadius1,
+        center = hiCenter1
+    )
+    val hiCenter2 = Offset(c.x + 0.30f * s, c.y - 0.20f * s)
+    val hiRadius2 = s * 0.26f
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(hi, hi.copy(alpha = 0.15f), Color.Transparent),
+            center = hiCenter2,
+            radius = hiRadius2
+        ),
+        radius = hiRadius2,
+        center = hiCenter2
+    )
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRain(drops: List<Particle>, fast: Float) {

@@ -76,6 +76,12 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         private val _distanceToNearestKm = MutableStateFlow(-1.0)
         val distanceToNearestKm = _distanceToNearestKm.asStateFlow()
 
+        private val _startLocation = MutableStateFlow<Location?>(null)
+        val startLocation = _startLocation.asStateFlow()
+
+        private val _totalTripDistanceKm = MutableStateFlow(0.0)
+        val totalTripDistanceKm = _totalTripDistanceKm.asStateFlow()
+
         // Static commands to control the service simply
         fun startService(context: Context) {
             val intent = Intent(context, TravelTrackingService::class.java)
@@ -106,6 +112,19 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
             } catch (e: Exception) {
                 Log.e(TAG, "Failed stopping service via stopService fallback", e)
             }
+        }
+
+        fun setStartLocation(latitude: Double, longitude: Double) {
+            val loc = Location("custom").apply {
+                this.latitude = latitude
+                this.longitude = longitude
+            }
+            _startLocation.value = loc
+        }
+
+        fun clearNearestAlarm() {
+            _nearestAlarm.value = null
+            _distanceToNearestKm.value = -1.0
         }
     }
 
@@ -189,6 +208,13 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
                 val location = locationResult.lastLocation ?: return
+                
+                // Ignore updates with accuracy worse than 50 meters to prevent GPS jitter and false triggers
+                if (location.hasAccuracy() && location.accuracy > 50f) {
+                    Log.d(TAG, "Ignoring location update due to high GPS jitter/poor accuracy: ${location.accuracy}m")
+                    return
+                }
+
                 _currentLocation.value = location
                 
                 // Convert m/s speed to km/h speed safely
@@ -215,6 +241,10 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
 
     private suspend fun processLocationUpdate(location: Location) {
         try {
+            if (_startLocation.value == null) {
+                _startLocation.value = location
+            }
+
             val db = AppDatabase.getDatabase(this)
             val activeAlarms = db.travelAlarmDao().getActiveTravelAlarms()
 
@@ -251,6 +281,28 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
             _nearestAlarm.value = closestAlarm
             _distanceToNearestKm.value = minDistance
 
+            // Update total trip distance from start location to the nearest waypoint
+            val startLoc = _startLocation.value
+            val customStartLat = closestAlarm?.startLatitude
+            val customStartLng = closestAlarm?.startLongitude
+            if (customStartLat != null && customStartLng != null && closestAlarm != null) {
+                _totalTripDistanceKm.value = calculateDistanceInKm(
+                    customStartLat,
+                    customStartLng,
+                    closestAlarm.latitude,
+                    closestAlarm.longitude
+                )
+            } else if (startLoc != null && closestAlarm != null) {
+                _totalTripDistanceKm.value = calculateDistanceInKm(
+                    startLoc.latitude,
+                    startLoc.longitude,
+                    closestAlarm.latitude,
+                    closestAlarm.longitude
+                )
+            } else {
+                _totalTripDistanceKm.value = 0.0
+            }
+
             val label = closestAlarm?.label ?: "Destination"
             val distFormatted = String.format(Locale.US, "%.2f km", minDistance)
             val speedStr = String.format(Locale.US, "%.1f km/h", _currentSpeedKmh.value)
@@ -280,7 +332,7 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
                 arrivalWakeLock?.let { if (it.isHeld) it.release() }
                 arrivalWakeLock = powerManager.newWakeLock(
                     android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP,
-                    "SolarisTravelAlarm::WakeLockTag"
+                    "SolarAlarmTravelAlarm::WakeLockTag"
                 ).apply {
                     setReferenceCounted(false)
                     acquire(15000L) // hold wakelock for 15 seconds to ensure ring
@@ -538,6 +590,18 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
     // individually guarded, and lateinit fields are only touched once initialized, so an
     // early/very-fast stop can never crash the process with UninitializedPropertyAccessException.
     private fun cleanupResources() {
+        try {
+            _startLocation.value = null
+            _totalTripDistanceKm.value = 0.0
+            _nearestAlarm.value = null
+            _distanceToNearestKm.value = -1.0
+            _currentLocation.value = null
+            _currentSpeedKmh.value = 0.0
+            triggeredAlarmIds.clear()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed resetting start location flows", e)
+        }
+
         try {
             if (::fusedLocationClient.isInitialized && ::locationCallback.isInitialized) {
                 fusedLocationClient.removeLocationUpdates(locationCallback)

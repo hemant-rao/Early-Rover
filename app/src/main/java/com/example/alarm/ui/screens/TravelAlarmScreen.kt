@@ -59,7 +59,14 @@ fun TravelAlarmScreen(
     // Service tracking parameters
     val isTracking by viewModel.isTravelTrackingActive.collectAsStateWithLifecycle()
     val currentLocation by viewModel.travelCurrentLocation.collectAsStateWithLifecycle()
-    val nearestAlarm by viewModel.travelNearestAlarm.collectAsStateWithLifecycle()
+    val startLocation by viewModel.travelStartLocation.collectAsStateWithLifecycle()
+    val totalTripDistance by viewModel.travelTotalTripDistance.collectAsStateWithLifecycle()
+    val rawNearestAlarm by viewModel.travelNearestAlarm.collectAsStateWithLifecycle()
+    val nearestAlarm = remember(rawNearestAlarm, travelAlarms) {
+        rawNearestAlarm?.let { na ->
+            if (travelAlarms.any { it.id == na.id }) na else null
+        }
+    }
     val distanceToNearest by viewModel.travelDistanceToNearest.collectAsStateWithLifecycle()
     val trackingStatusMsg by viewModel.travelStatusMsg.collectAsStateWithLifecycle()
     val currentSpeed by viewModel.travelCurrentSpeed.collectAsStateWithLifecycle()
@@ -69,7 +76,7 @@ fun TravelAlarmScreen(
     var editingAlarmId by remember { mutableStateOf<Int?>(null) }
     val isHindi = viewModel.currentLanguage.collectAsStateWithLifecycle().value == "hi"
 
-    // Waypoint properties
+    // Waypoint properties (TO)
     var waypointLabel by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("STATION") }
     var waypointLat by remember { mutableStateOf("") }
@@ -79,10 +86,20 @@ fun TravelAlarmScreen(
     var waypointVibration by remember { mutableStateOf(true) }
     var waypointFlash by remember { mutableStateOf(false) }
 
+    // Start Location properties (FROM)
+    var startLabel by remember { mutableStateOf("Starting Point") }
+    var startLat by remember { mutableStateOf("") }
+    var startLng by remember { mutableStateOf("") }
+
     // Remote lookup parameters
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<CityInfo>>(emptyList()) }
     var isSearchingNominatim by remember { mutableStateOf(false) }
+
+    // Start location lookup parameters
+    var searchQueryStart by remember { mutableStateOf("") }
+    var searchResultsStart by remember { mutableStateOf<List<CityInfo>>(emptyList()) }
+    var isSearchingNominatimStart by remember { mutableStateOf(false) }
 
     // Launcher for location permissions
     val locationPermissionLauncher = rememberLauncherForActivityResult(
@@ -97,21 +114,46 @@ fun TravelAlarmScreen(
 
     fun t(en: String, hi: String): String = if (isHindi) hi else en
 
+    var searchJobDest by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     fun runAddressLookup(query: String) {
         if (query.trim().length < 3) return
         isSearchingNominatim = true
-        coroutineScope.launch {
+        searchJobDest?.cancel()
+        searchJobDest = coroutineScope.launch {
             try {
-                kotlin.concurrent.thread {
+                kotlinx.coroutines.delay(500) // debounce
+                val results = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     val locator = com.example.alarm.location.LocationHelper(context)
-                    val r = locator.searchCity(query)
-                    android.os.Handler(android.os.Looper.getMainLooper()).post {
-                        searchResults = r
-                        isSearchingNominatim = false
-                    }
+                    locator.searchCity(query)
                 }
+                searchResults = results
+                isSearchingNominatim = false
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // ignore
             } catch (e: Exception) {
                 isSearchingNominatim = false
+            }
+        }
+    }
+
+    var searchJobStart by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    fun runStartAddressLookup(query: String) {
+        if (query.trim().length < 3) return
+        isSearchingNominatimStart = true
+        searchJobStart?.cancel()
+        searchJobStart = coroutineScope.launch {
+            try {
+                kotlinx.coroutines.delay(500) // debounce
+                val results = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val locator = com.example.alarm.location.LocationHelper(context)
+                    locator.searchCity(query)
+                }
+                searchResultsStart = results
+                isSearchingNominatimStart = false
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // ignore
+            } catch (e: Exception) {
+                isSearchingNominatimStart = false
             }
         }
     }
@@ -128,7 +170,7 @@ fun TravelAlarmScreen(
             item {
                 Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     Text(
-                        text = t("INTELLIGENT ARRIVAL WATCHDOG", "सफ़र (यात्रा) अलार्म"),
+                        text = t("ROUTE SENTRY", "मार्ग सुरक्षा"),
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Black,
                             color = SleekPrimary,
@@ -138,8 +180,8 @@ fun TravelAlarmScreen(
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = t(
-                            "Track transit in background! Ring loud alarms, shake and announce your station using Voice TTS so you never miss your stop while sleeping.",
-                            "बैकग्राउंड में यात्रा ट्रैक करें! भारी अलार्म बजाएं, फोन हिलाएं और टीटीएस वॉयस द्वारा स्टेशन की घोषणा करें ताकि सोते समय आपका स्टॉप कभी न छूटे।"
+                            "Smart GPS alerts with alarms and voice notifications near your stop.",
+                            "स्टॉप पास आते ही अलार्म और आवाज़ द्वारा गतिशील सुरक्षा अलर्ट।"
                         ),
                         fontSize = 11.sp,
                         color = SleekMutedText,
@@ -176,7 +218,7 @@ fun TravelAlarmScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = if (isTracking) t("ACTIVE WATCHDOG RUNNING", "लाइव सुरक्षा चालू है") else t("WATCHDOG INACTIVE", "सुरक्षा निष्क्रिय है"),
+                                    text = if (isTracking) t("ACTIVE JOURNEY TRACKER RUNNING", "लाइव यात्रा ट्रैकर चालू है") else t("JOURNEY TRACKER INACTIVE", "यात्रा ट्रैकर निष्क्रिय है"),
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (isTracking) Color(0xFF10B981) else SleekMutedText
@@ -216,40 +258,177 @@ fun TravelAlarmScreen(
                         }
 
                         Box(modifier = Modifier.fillMaxWidth().height(0.5.dp).background(SleekBorder.copy(alpha = 0.5f)))
-
-                        if (isTracking && distanceToNearest > 0) {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+ 
+                        // LIVE ROUTE TRANSIT LOOKUP (FROM ➔ TO)
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = SleekBackground.copy(alpha = 0.5f)),
+                            border = BorderStroke(0.5.dp, SleekBorder),
+                            shape = RoundedCornerShape(16.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    text = t("LIVE JOURNEY TRACKER (FROM ➔ TO)", "लाइव यात्रा ट्रैकर (प्रस्थान ➔ गंतव्य)"),
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = SleekSecondary,
+                                    letterSpacing = 1.sp
+                                )
+ 
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(text = t("Distance remaining", "शेष दूरी"), fontSize = 11.sp, color = SleekMutedText)
-                                    Text(
-                                        text = String.format(Locale.US, "%.2f km", distanceToNearest),
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = SleekPrimary
+                                    // From column
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(8.dp)
+                                                    .background(if (isTracking && startLocation != null) Color(0xFF10B981) else SleekMutedText, CircleShape)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = t("FROM (Starting Point)", "प्रस्थान स्थान (सफ़र की शुरुआत)"),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = SleekMutedText
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = if (isTracking && startLocation != null) {
+                                                String.format(Locale.US, "Lat: %.4f, Lng: %.4f", startLocation!!.latitude, startLocation!!.longitude)
+                                            } else {
+                                                t("Waiting for Tracker start...", "ट्रैकर शुरू होने का इंतज़ार...")
+                                            },
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = SleekActiveText
+                                        )
+                                    }
+ 
+                                    // Waypoint connector
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowForward,
+                                        contentDescription = null,
+                                        tint = if (isTracking) SleekPrimary else SleekMutedText,
+                                        modifier = Modifier.padding(horizontal = 8.dp).size(20.dp)
                                     )
+ 
+                                    // To column
+                                    Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = t("TO (Nearest Destination)", "गंतव्य स्थान (निकटतम)"),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = SleekMutedText
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(8.dp)
+                                                    .background(if (nearestAlarm != null) SleekPrimary else SleekMutedText, CircleShape)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = nearestAlarm?.label ?: t("None set", "कोई नहीं"),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = if (nearestAlarm != null) SleekPrimary else SleekActiveText
+                                        )
+                                        if (nearestAlarm != null) {
+                                            Text(
+                                                text = String.format(Locale.US, "Lat: %.3f, Lng: %.3f", nearestAlarm!!.latitude, nearestAlarm!!.longitude),
+                                                fontSize = 9.sp,
+                                                color = SleekMutedText
+                                            )
+                                        }
+                                        
+                                        val activeCount = travelAlarms.count { it.active }
+                                        if (activeCount > 1) {
+                                            Text(
+                                                text = "+ ${activeCount - 1} more active alerts",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = SleekSecondary,
+                                                modifier = Modifier.padding(top = 2.dp)
+                                            )
+                                        }
+                                    }
                                 }
-
+ 
+                                if (isTracking && distanceToNearest > 0) {
+                                    // Live distance badge
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(SleekPrimary.copy(alpha = 0.12f))
+                                            .padding(vertical = 8.dp, horizontal = 12.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column {
+                                                Text(
+                                                    text = t("LIVE DISTANCE REMAINING:", "बची हुई लाइव दूरी:"),
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = SleekPrimary
+                                                )
+                                                Text(
+                                                    text = t("⏳ Updates dynamically on motion", "⏳ गति के अनुसार जीपीएस द्वारा स्वतः अपडेट"),
+                                                    fontSize = 8.sp,
+                                                    color = SleekMutedText
+                                                )
+                                            }
+                                            Text(
+                                                text = String.format(Locale.US, "%.3f km", distanceToNearest),
+                                                fontSize = 18.sp,
+                                                fontWeight = FontWeight.Black,
+                                                color = SleekPrimary
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+ 
+                        if (isTracking && distanceToNearest > 0) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                 val targetRadius = nearestAlarm?.radiusKm ?: 2.0
-                                val totalSpan = maxOf(targetRadius * 3, distanceToNearest)
-                                val progress = (1.0f - (distanceToNearest / totalSpan).toFloat()).coerceIn(0f, 1f)
-
+                                val progress = if (totalTripDistance > 0.1) {
+                                    (1.0f - (distanceToNearest / totalTripDistance).toFloat()).coerceIn(0f, 1f)
+                                } else {
+                                    0f
+                                }
+ 
                                 LinearProgressIndicator(
                                     progress = progress,
                                     modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
                                     color = SleekPrimary,
                                     trackColor = SleekBorder.copy(alpha = 0.5f)
                                 )
-
+ 
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text(text = t("Target Alarm Radius:", "अलार्म ट्रिगर दायरा:"), fontSize = 10.sp, color = SleekMutedText)
                                     Text(
-                                        text = "${String.format(Locale.US, "%.1f", targetRadius)} km",
+                                        text = t(
+                                            "Total Trip Distance: ${String.format(Locale.US, "%.1f", totalTripDistance)} km",
+                                            "कुल सफ़र की दूरी: ${String.format(Locale.US, "%.1f", totalTripDistance)} किमी"
+                                        ),
+                                        fontSize = 10.sp,
+                                        color = SleekMutedText
+                                    )
+                                    Text(
+                                        text = "${String.format(Locale.US, "%.1f", targetRadius)} km before arrival",
                                         fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = SleekSecondary
@@ -258,7 +437,7 @@ fun TravelAlarmScreen(
                             }
                         } else {
                             Text(
-                                text = if (isTracking) t("Waiting for coordinates...", "स्थान मिलने का इंतज़ार...") else t("Start Tracking to safeguard your route.", "मार्ग सुरक्षित करने के लिए ट्रैकिंग चालू करें।"),
+                                text = if (isTracking) t("Waiting for satellite coordinates...", "जीपीएस स्थिति मिलने का इंतज़ार...") else t("Start Tracking to safeguard your route (FROM ➔ TO).", "लाइव यात्रा सुरक्षा शुरू करने के लिए ट्रैकिंग चालू करें।"),
                                 fontSize = 11.sp,
                                 color = SleekMutedText,
                                 textAlign = TextAlign.Center,
@@ -279,16 +458,24 @@ fun TravelAlarmScreen(
 
                         Button(
                             onClick = {
+                                val activeAlarms = travelAlarms.filter { it.active }
                                 if (isTracking) {
                                     viewModel.stopTravelTracking()
                                 } else if (travelAlarms.isEmpty()) {
-                                    // Nothing to track yet — guide the user to add a waypoint first
-                                    // instead of starting an empty (and pointless) sentry.
                                     android.widget.Toast.makeText(
                                         context,
                                         t(
                                             "Add a travel alarm first, then start the sentry.",
                                             "पहले एक सफ़र अलार्म जोड़ें, फिर सुरक्षा चालू करें।"
+                                        ),
+                                        android.widget.Toast.LENGTH_LONG
+                                    ).show()
+                                } else if (activeAlarms.isEmpty()) {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        t(
+                                            "Enable at least one travel alarm before starting seamless sentry!",
+                                            "सुरक्षा ट्रैकिंग चालू करने से पहले कृपया कम से कम एक सफ़र अलार्म चालू (Active) करें!"
                                         ),
                                         android.widget.Toast.LENGTH_LONG
                                     ).show()
@@ -353,6 +540,11 @@ fun TravelAlarmScreen(
                             waypointFlash = false
                             searchResults = emptyList()
                             searchQuery = ""
+                            startLabel = "Starting Point"
+                            startLat = currentLocation?.latitude?.toString() ?: ""
+                            startLng = currentLocation?.longitude?.toString() ?: ""
+                            searchResultsStart = emptyList()
+                            searchQueryStart = ""
                             editingAlarmId = null
                             showAddDialog = true
                         },
@@ -401,8 +593,8 @@ fun TravelAlarmScreen(
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
                                 text = t(
-                                    "Tap the '+' icon to save your Home, Office, Bus Stop, or Railway Station. Sentry alarms will go off before arrival!",
-                                    "घर, ऑफिस, बस स्टॉप या रेलवे स्टेशन जोड़ने के लिए '+' दबाएं। आपके स्टॉप पर पहुंचने से पहले सचेतक बज उठेगा!"
+                                    "Tap the '+' icon to save your Home, Office, Bus Stop, or Railway Station. Tracker alarms will go off before arrival!",
+                                    "घर, ऑफिस, बस स्टॉप या रेलवे स्टेशन जोड़ने के लिए '+' दबाएं। आपके स्टॉप पर पहुंचने से पहले ट्रैकर बज उठेगा!"
                                 ),
                                 fontSize = 11.sp,
                                 color = SleekMutedText,
@@ -416,25 +608,82 @@ fun TravelAlarmScreen(
                 items(travelAlarms) { alarm ->
                     TravelAlarmCard(
                         alarm = alarm,
-                        onToggleActive = { viewModel.toggleTravelAlarmActive(alarm) },
-                        onDelete = { viewModel.deleteTravelAlarm(alarm) },
-                        onEdit = {
-                            // Prefill the dialog state from this saved alarm, then open it in edit mode.
-                            waypointLabel = alarm.label
-                            selectedCategory = alarm.category
-                            waypointLat = alarm.latitude.toString()
-                            waypointLng = alarm.longitude.toString()
-                            waypointRadius = alarm.radiusKm.toFloat()
-                            waypointTts = alarm.ttsEnabled
-                            waypointVibration = alarm.vibrationEnabled
-                            waypointFlash = alarm.flashEnabled
-                            searchResults = emptyList()
-                            searchQuery = ""
-                            editingAlarmId = alarm.id
-                            showAddDialog = true
+                        onToggleActive = {
+                            if (isTracking && alarm.active) {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    t(
+                                        "Journey Tracker is active! Please stop Tracker before turning off travel alarms.",
+                                        "यात्रा ट्रैकिंग चालू है! ट्रेवल अलार्म को बंद करने से पहले कृपया ट्रैकिंग बंद करें।"
+                                    ),
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                viewModel.toggleTravelAlarmActive(alarm)
+                            }
                         },
-                        onUpdateRadius = { radius -> viewModel.updateTravelAlarm(alarm.copy(radiusKm = radius)) },
+                        onDelete = {
+                            if (isTracking) {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    t(
+                                        "Journey tracking is active! Please stop Tracker before deleting a travel alarm.",
+                                        "यात्रा ट्रैकिंग चालू है! कृपया ट्रेवल अलार्म को हटाने से पहले ट्रैकिंग बंद करें।"
+                                    ),
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                viewModel.deleteTravelAlarm(alarm)
+                            }
+                        },
+                        onEdit = {
+                            if (isTracking) {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    t(
+                                        "Journey Tracker is active! Please stop Tracker before editing travel alarms.",
+                                        "यात्रा ट्रैकिंग चालू है! कृपया ट्रेवल अलार्म बदलने से पहले ट्रैकिंग बंद करें।"
+                                    ),
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                // Prefill the dialog state from this saved alarm, then open it in edit mode.
+                                waypointLabel = alarm.label
+                                selectedCategory = alarm.category
+                                waypointLat = alarm.latitude.toString()
+                                waypointLng = alarm.longitude.toString()
+                                waypointRadius = alarm.radiusKm.toFloat()
+                                waypointTts = alarm.ttsEnabled
+                                waypointVibration = alarm.vibrationEnabled
+                                waypointFlash = alarm.flashEnabled
+                                searchResults = emptyList()
+                                searchQuery = ""
+                                startLabel = alarm.startLabel
+                                startLat = alarm.startLatitude?.toString() ?: ""
+                                startLng = alarm.startLongitude?.toString() ?: ""
+                                searchResultsStart = emptyList()
+                                searchQueryStart = ""
+                                editingAlarmId = alarm.id
+                                showAddDialog = true
+                            }
+                        },
+                        onUpdateRadius = { radius ->
+                            if (isTracking) {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    t(
+                                        "Journey Tracker is active! Please stop Tracker before changing alert distance.",
+                                        "यात्रा ट्रैकिंग चालू है! अलार्म दूरी बदलने से पहले कृपया ट्रैकिंग बंद करें।"
+                                    ),
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            } else {
+                                viewModel.updateTravelAlarm(alarm.copy(radiusKm = radius))
+                            }
+                        },
+                        speedKmh = currentSpeed,
                         isHindi = isHindi,
+                        isTrackingActive = isTracking,
                         t = ::t
                     )
                 }
@@ -457,13 +706,10 @@ fun TravelAlarmScreen(
                     shape = RoundedCornerShape(24.dp)
                 ) {
                     Column(
-                        modifier = Modifier
-                            .padding(18.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        modifier = Modifier.fillMaxSize().padding(18.dp)
                     ) {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -483,106 +729,177 @@ fun TravelAlarmScreen(
                             }
                         }
 
-                        Text(
-                            text = t("1. Quick Finder (Online Station Lookup)", "1. ऑनलाइन स्टेशन/स्टॉप खोजें"),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = SleekSecondary
-                        )
-
-                        Row(
+                        Column(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .height(44.dp)
-                                .background(SleekBackground, RoundedCornerShape(12.dp))
-                                .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(12.dp))
-                                .padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .weight(1f)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = null,
-                                tint = SleekMutedText,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            BasicTextField(
-                                value = searchQuery,
-                                onValueChange = { q ->
-                                    searchQuery = q
-                                    runAddressLookup(q)
-                                },
-                                modifier = Modifier.weight(1f),
-                                textStyle = TextStyle(color = SleekActiveText, fontSize = 13.sp),
-                                singleLine = true,
-                                cursorBrush = SolidColor(SleekPrimary),
-                                decorationBox = { inner ->
-                                    if (searchQuery.isEmpty()) {
-                                        Text(
-                                            text = t("Type station name... (e.g. New Delhi Station)", "स्टेशन या शहर का नाम लिखें..."),
-                                            color = SleekMutedText,
-                                            fontSize = 12.sp
-                                        )
-                                    }
-                                    inner()
-                                }
-                            )
-                            if (isSearchingNominatim) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    strokeWidth = 1.5.dp,
-                                    color = SleekPrimary
+                             // --- SECTION 1: START LOCATION (FROM) ---
+                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                 Text(
+                                     text = t("1. Starting Point / Current Location (FROM)", "1. प्रस्थान स्थान / सफ़र की शुरुआत (FROM)"),
+                                     fontSize = 11.sp,
+                                     fontWeight = FontWeight.Bold,
+                                     color = SleekSecondary
+                                 )
+                                 
+                                 val showStartCoords = startLat.isNotEmpty() && startLng.isNotEmpty()
+                                 Text(
+                                     text = if (showStartCoords) {
+                                         t("📍 Start GPS Coordinates: $startLat, $startLng", "📍 प्रस्थान निर्देशांक: $startLat, $startLng")
+                                     } else {
+                                         t("📍 No Starting Point coordinates loaded (Use list search/GPS above)", "📍 कोई निर्देशांक लोड नहीं है (ऊपर खोज या जीपीएस का उपयोग करें)")
+                                     },
+                                     fontSize = 10.sp,
+                                     color = if (showStartCoords) SleekSecondary else SleekMutedText,
+                                     fontWeight = FontWeight.Bold,
+                                     modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                                 )
+ 
+                                 Box(modifier = Modifier.fillMaxWidth()) {
+                                     Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(44.dp)
+                                    .background(SleekBackground, RoundedCornerShape(12.dp))
+                                    .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(12.dp))
+                                    .padding(horizontal = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = null,
+                                    tint = SleekMutedText,
+                                    modifier = Modifier.size(16.dp)
                                 )
-                            }
-                        }
-
-                        if (searchResults.isNotEmpty() && searchQuery.isNotEmpty()) {
-                            Box(modifier = Modifier.heightIn(max = 130.dp)) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    searchResults.forEach { city ->
-                                        Card(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable {
-                                                    waypointLabel = city.name
-                                                    waypointLat = city.latitude.toString()
-                                                    waypointLng = city.longitude.toString()
-                                                    searchResults = emptyList()
-                                                    searchQuery = ""
-                                                }
-                                                .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(10.dp)),
-                                            shape = RoundedCornerShape(10.dp),
-                                            colors = CardDefaults.cardColors(containerColor = SleekBackground)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier.padding(8.dp),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.LocationCity,
-                                                    contentDescription = null,
-                                                    tint = SleekSecondary,
-                                                    modifier = Modifier.size(14.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(8.dp))
-                                                Column {
-                                                    Text(
-                                                        text = "${city.name}, ${city.country}",
-                                                        fontWeight = FontWeight.Bold,
-                                                        fontSize = 11.sp,
-                                                        color = SleekActiveText
-                                                    )
-                                                    Text(
-                                                        text = "Lat: ${String.format(Locale.US, "%.4f", city.latitude)} | Lng: ${String.format(Locale.US, "%.4f", city.longitude)}",
-                                                        fontSize = 9.sp,
-                                                        color = SleekMutedText
-                                                    )
-                                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                BasicTextField(
+                                    value = startLabel,
+                                    onValueChange = { q ->
+                                        startLabel = q
+                                        val parts = q.replace("📍", "").trim().split(",")
+                                        if (parts.size == 2) {
+                                            val latVal = parts[0].trim().toDoubleOrNull()
+                                            val lngVal = parts[1].trim().toDoubleOrNull()
+                                            if (latVal != null && lngVal != null && latVal in -90.0..90.0 && lngVal in -180.0..180.0) {
+                                                startLat = latVal.toString()
+                                                startLng = lngVal.toString()
+                                            } else {
+                                                runStartAddressLookup(q)
                                             }
+                                        } else {
+                                            runStartAddressLookup(q)
                                         }
+                                    },
+                                    modifier = Modifier.weight(1f).testTag("start_search_input"),
+                                    textStyle = TextStyle(color = SleekActiveText, fontSize = 13.sp),
+                                    singleLine = true,
+                                    cursorBrush = SolidColor(SleekPrimary),
+                                    decorationBox = { inner ->
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.CenterStart
+                                        ) {
+                                            if (startLabel.isEmpty()) {
+                                                Text(
+                                                    text = t("Type starting point or search city...", "प्रस्थान स्थान का नाम या शहर खोजें..."),
+                                                    color = SleekMutedText,
+                                                    fontSize = 12.sp
+                                                )
+                                            }
+                                            inner()
+                                        }
+                                    }
+                                )
+                                if (isSearchingNominatimStart) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 1.5.dp,
+                                        color = SleekPrimary
+                                    )
+                                }
+                                // Compact inline GPS icon button
+                                Box(
+                                    modifier = Modifier
+                                        .padding(horizontal = 4.dp)
+                                        .width(1.dp)
+                                        .height(16.dp)
+                                        .background(SleekBorder)
+                                )
+                                IconButton(
+                                    onClick = {
+                                        // Trigger my location retrieval
+                                        locationPermissionLauncher.launch(
+                                            arrayOf(
+                                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                                Manifest.permission.ACCESS_COARSE_LOCATION
+                                            )
+                                        )
+                                        val lat = viewModel.latitude.value
+                                        val lng = viewModel.longitude.value
+                                        val name = viewModel.locationName.value
+                                        if (lat != 0.0 && lng != 0.0) {
+                                            startLabel = if (name.isNotEmpty()) name else "My Location"
+                                            startLat = lat.toString()
+                                            startLng = lng.toString()
+                                        }
+                                    },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.GpsFixed,
+                                        contentDescription = "My Location",
+                                        tint = SleekPrimary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+
+                            // Start Location dropdown overlay
+                            if (searchResultsStart.isNotEmpty() && startLabel.length >= 3) {
+                                DropdownMenu(
+                                    expanded = true,
+                                    onDismissRequest = { searchResultsStart = emptyList() },
+                                    properties = androidx.compose.ui.window.PopupProperties(focusable = false),
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.9f)
+                                        .background(SleekCardBg)
+                                        .border(BorderStroke(1.dp, SleekBorder), RoundedCornerShape(12.dp))
+                                ) {
+                                    searchResultsStart.forEach { city ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.LocationCity,
+                                                        contentDescription = null,
+                                                        tint = SleekMutedText,
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(16.dp))
+                                                    Column {
+                                                        Text(
+                                                            text = "${city.name}, ${city.country}",
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            fontSize = 14.sp,
+                                                            color = SleekActiveText
+                                                        )
+                                                        Text(
+                                                            text = "Lat: ${String.format(Locale.US, "%.2f", city.latitude)} | Lng: ${String.format(Locale.US, "%.2f", city.longitude)}",
+                                                            fontSize = 11.sp,
+                                                            color = SleekMutedText
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                startLabel = city.name
+                                                startLat = city.latitude.toString()
+                                                startLng = city.longitude.toString()
+                                                searchResultsStart = emptyList()
+                                            }
+                                        )
                                     }
                                 }
                             }
@@ -590,135 +907,152 @@ fun TravelAlarmScreen(
 
                         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(SleekBorder.copy(alpha = 0.5f)))
 
-                        Text(
-                            text = t("2. Waypoint Details (Edit Details)", "2. लोकेशन जानकारी (विवरण बदलें)"),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = SleekSecondary
-                        )
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(44.dp)
-                                .background(SleekBackground, RoundedCornerShape(12.dp))
-                                .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(12.dp))
-                                .padding(horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(imageVector = Icons.Default.Label, contentDescription = null, tint = SleekMutedText, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            BasicTextField(
-                                value = waypointLabel,
-                                onValueChange = { waypointLabel = it },
-                                modifier = Modifier.weight(1f).testTag("waypoint_label_input"),
-                                textStyle = TextStyle(color = SleekActiveText, fontSize = 13.sp),
-                                singleLine = true,
-                                cursorBrush = SolidColor(SleekPrimary),
-                                decorationBox = { inner ->
-                                    if (waypointLabel.isEmpty()) {
-                                        Text(text = t("Give name (e.g. My Home, Station)", "स्टॉप का नाम (जैसे: मेरा घर, दिल्ली जंक्शन)"), color = SleekMutedText, fontSize = 12.sp)
-                                    }
-                                    inner()
-                                }
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Row(
+                         // --- SECTION 2: DESTINATION LOCATION (TO) ---
+                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                             Text(
+                                 text = t("2. Destination Point / Stop Location (TO)", "2. गंतव्य स्थान / सफ़र की समाप्ति (TO)"),
+                                 fontSize = 11.sp,
+                                 fontWeight = FontWeight.Bold,
+                                 color = SleekSecondary
+                             )
+                             
+                             val showWaypointCoords = waypointLat.isNotEmpty() && waypointLng.isNotEmpty()
+                             Text(
+                                 text = if (showWaypointCoords) {
+                                     t("📍 Destination GPS Coordinates: $waypointLat, $waypointLng", "📍 गंतव्य निर्देशांक: $waypointLat, $waypointLng")
+                                 } else {
+                                     t("📍 No Destination Point coordinates loaded (Use list search/GPS above)", "📍 कोई निर्देशांक लोड नहीं है (ऊपर खोज या जीपीएस का उपयोग करें)")
+                                 },
+                                 fontSize = 10.sp,
+                                 color = if (showWaypointCoords) SleekSecondary else SleekMutedText,
+                                 fontWeight = FontWeight.Bold,
+                                 modifier = Modifier.padding(start = 4.dp, bottom = 2.dp)
+                             )
+ 
+                             Box(modifier = Modifier.fillMaxWidth()) {
+                                 Row(
                                 modifier = Modifier
-                                    .weight(1f)
+                                    .fillMaxWidth()
                                     .height(44.dp)
                                     .background(SleekBackground, RoundedCornerShape(12.dp))
                                     .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(12.dp))
                                     .padding(horizontal = 10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(text = "LAT", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SleekSecondary)
+                                Icon(
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = null,
+                                    tint = SleekMutedText,
+                                    modifier = Modifier.size(16.dp)
+                                )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 BasicTextField(
-                                    value = waypointLat,
-                                    onValueChange = { waypointLat = it },
-                                    modifier = Modifier.weight(1f).testTag("latitude_input"),
+                                    value = waypointLabel,
+                                    onValueChange = { q ->
+                                        waypointLabel = q
+                                        val parts = q.replace("📍", "").trim().split(",")
+                                        if (parts.size == 2) {
+                                            val latVal = parts[0].trim().toDoubleOrNull()
+                                            val lngVal = parts[1].trim().toDoubleOrNull()
+                                            if (latVal != null && lngVal != null && latVal in -90.0..90.0 && lngVal in -180.0..180.0) {
+                                                waypointLat = latVal.toString()
+                                                waypointLng = lngVal.toString()
+                                            } else {
+                                                runAddressLookup(q)
+                                            }
+                                        } else {
+                                            runAddressLookup(q)
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f).testTag("destination_search_input"),
                                     textStyle = TextStyle(color = SleekActiveText, fontSize = 13.sp),
                                     singleLine = true,
                                     cursorBrush = SolidColor(SleekPrimary),
                                     decorationBox = { inner ->
-                                        if (waypointLat.isEmpty()) {
-                                            Text(text = "Ex: 28.61", color = SleekMutedText, fontSize = 12.sp)
+                                        Box(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            contentAlignment = Alignment.CenterStart
+                                        ) {
+                                            if (waypointLabel.isEmpty()) {
+                                                Text(
+                                                    text = t("Type destination or search city/station...", "गंतव्य स्थान का नाम या शहर/स्टेशन खोजें..."),
+                                                    color = SleekMutedText,
+                                                    fontSize = 12.sp
+                                                )
+                                            }
+                                            inner()
                                         }
-                                        inner()
                                     }
                                 )
+                                if (isSearchingNominatim) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 1.5.dp,
+                                        color = SleekPrimary
+                                    )
+                                }
                             }
 
-                            Row(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(44.dp)
-                                    .background(SleekBackground, RoundedCornerShape(12.dp))
-                                    .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(12.dp))
-                                    .padding(horizontal = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(text = "LNG", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SleekSecondary)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                BasicTextField(
-                                    value = waypointLng,
-                                    onValueChange = { waypointLng = it },
-                                    modifier = Modifier.weight(1f).testTag("longitude_input"),
-                                    textStyle = TextStyle(color = SleekActiveText, fontSize = 13.sp),
-                                    singleLine = true,
-                                    cursorBrush = SolidColor(SleekPrimary),
-                                    decorationBox = { inner ->
-                                        if (waypointLng.isEmpty()) {
-                                            Text(text = "Ex: 77.20", color = SleekMutedText, fontSize = 12.sp)
-                                        }
-                                        inner()
+                            // Destination overlay popup suggestions
+                            if (searchResults.isNotEmpty() && waypointLabel.length >= 3) {
+                                DropdownMenu(
+                                    expanded = true,
+                                    onDismissRequest = { searchResults = emptyList() },
+                                    properties = androidx.compose.ui.window.PopupProperties(focusable = false),
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.9f)
+                                        .background(SleekCardBg)
+                                        .border(BorderStroke(1.dp, SleekBorder), RoundedCornerShape(12.dp))
+                                ) {
+                                    searchResults.forEach { city ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.LocationCity,
+                                                        contentDescription = null,
+                                                        tint = SleekMutedText,
+                                                        modifier = Modifier.size(20.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(16.dp))
+                                                    Column {
+                                                        Text(
+                                                            text = "${city.name}, ${city.country}",
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            fontSize = 14.sp,
+                                                            color = SleekActiveText
+                                                        )
+                                                        Text(
+                                                            text = "Lat: ${String.format(Locale.US, "%.2f", city.latitude)} | Lng: ${String.format(Locale.US, "%.2f", city.longitude)}",
+                                                            fontSize = 11.sp,
+                                                            color = SleekMutedText
+                                                        )
+                                                    }
+                                                }
+                                            },
+                                            onClick = {
+                                                waypointLabel = city.name
+                                                waypointLat = city.latitude.toString()
+                                                waypointLng = city.longitude.toString()
+                                                searchResults = emptyList()
+                                            }
+                                        )
                                     }
-                                )
+                                }
                             }
+
+                        }
                         }
 
-                        Button(
-                            onClick = {
-                                val defaultLoc = viewModel.latitude.value
-                                val defaultLng = viewModel.longitude.value
-                                waypointLat = defaultLoc.toString()
-                                waypointLng = defaultLng.toString()
-                                if (waypointLabel.isEmpty()) {
-                                    waypointLabel = viewModel.locationName.value.ifEmpty { "My Location" }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = SleekBackground),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(36.dp)
-                                .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(10.dp)),
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(0.dp)
-                        ) {
-                            Icon(imageVector = Icons.Default.MyLocation, contentDescription = null, tint = SleekPrimary, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(
-                                text = t("Set to My Current GPS Location", "अपने वर्तमान जीपीएस स्थान का उपयोग करें"),
+                                text = t("3. Select Category Profile", "3. कैटेगरी प्रोफाइल चुनें"),
                                 fontSize = 11.sp,
-                                color = SleekActiveText,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                color = SleekSecondary
                             )
-                        }
 
-                        Text(
-                            text = t("3. Select Category Profile", "3. कैटेगरी प्रोफाइल चुनें"),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = SleekSecondary
-                        )
-
-                        Row(
+                            Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
@@ -751,46 +1085,61 @@ fun TravelAlarmScreen(
                                 }
                             }
                         }
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = t("4. Trigger Alarm Distance", "4. अलार्म कितनी दूरी पहले चाहिए"),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SleekSecondary
+                                    )
+                                    Text(
+                                        text = t(
+                                            "Set how many kilometers before your target station/stop you want to wake up.",
+                                            "चुनें कि आपके लक्षित स्टेशन/स्टॉप से कितने किलोमीटर पहले आप उठना चाहते हैं।"
+                                        ),
+                                        fontSize = 9.sp,
+                                        color = SleekMutedText,
+                                        lineHeight = 12.sp,
+                                        modifier = Modifier.padding(top = 2.dp, bottom = 4.dp, end = 8.dp)
+                                    )
+                                }
+                                Text(
+                                    text = "${String.format(Locale.US, "%.1f", waypointRadius)} km",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SleekPrimary
+                                )
+                            }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
+                            Slider(
+                                value = waypointRadius,
+                                onValueChange = { waypointRadius = it },
+                                valueRange = 0.5f..50.0f,
+                                steps = 99,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = SleekPrimary,
+                                    activeTrackColor = SleekPrimary,
+                                    inactiveTrackColor = SleekBorder
+                                ),
+                                modifier = Modifier.height(24.dp)
+                            )
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(
-                                text = t("4. Proximity Radius (Warn me before)", "4. अलार्म दायरा (मुझसे पहले सचेत करें)"),
+                                text = t("5. Alert Methods", "5. अलार्म के प्रकार"),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = SleekSecondary
                             )
-                            Text(
-                                text = "${String.format(Locale.US, "%.1f", waypointRadius)} km",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SleekPrimary
-                            )
-                        }
 
-                        Slider(
-                            value = waypointRadius,
-                            onValueChange = { waypointRadius = it },
-                            valueRange = 0.5f..10.0f,
-                            steps = 19,
-                            colors = SliderDefaults.colors(
-                                thumbColor = SleekPrimary,
-                                activeTrackColor = SleekPrimary,
-                                inactiveTrackColor = SleekBorder
-                            ),
-                            modifier = Modifier.height(24.dp)
-                        )
-
-                        Text(
-                            text = t("5. Alert Methods", "5. अलार्म के प्रकार"),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = SleekSecondary
-                        )
-
-                        Row(
+                            Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
@@ -845,11 +1194,14 @@ fun TravelAlarmScreen(
                                 }
                             }
                         }
+                        }
+                        
+                        } // End Scrollable Column
 
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
 
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             OutlinedButton(
@@ -867,12 +1219,28 @@ fun TravelAlarmScreen(
                                     val latDouble = waypointLat.toDoubleOrNull()
                                     val lngDouble = waypointLng.toDoubleOrNull()
                                     val labelText = waypointLabel.trim()
+                                    val startLabelText = startLabel.trim()
+                                    val startLatDouble = startLat.toDoubleOrNull()
+                                    val startLngDouble = startLng.toDoubleOrNull()
+
+                                    val isIdentical = latDouble != null && lngDouble != null &&
+                                        startLatDouble != null && startLngDouble != null &&
+                                        (Math.abs(latDouble - startLatDouble) < 0.0001 && Math.abs(lngDouble - startLngDouble) < 0.0001)
 
                                     val valid = labelText.isNotEmpty() &&
                                         latDouble != null && lngDouble != null &&
                                         latDouble in -90.0..90.0 && lngDouble in -180.0..180.0
 
-                                    if (valid) {
+                                    if (isIdentical) {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            t(
+                                                "Starting point (FROM) and target destination (TO) cannot be physical copies or identical coordinates.",
+                                                "प्रस्थान (FROM) और गंतव्य स्थान (TO) एक ही या एकसमान नहीं हो सकते।"
+                                            ),
+                                            android.widget.Toast.LENGTH_LONG
+                                        ).show()
+                                    } else if (valid) {
                                         if (editingAlarmId != null) {
                                             val alarm = TravelAlarm(
                                                 id = editingAlarmId!!,
@@ -884,7 +1252,10 @@ fun TravelAlarmScreen(
                                                 active = true,
                                                 ttsEnabled = waypointTts,
                                                 flashEnabled = waypointFlash,
-                                                vibrationEnabled = waypointVibration
+                                                vibrationEnabled = waypointVibration,
+                                                startLabel = startLabelText,
+                                                startLatitude = startLatDouble,
+                                                startLongitude = startLngDouble
                                             )
                                             viewModel.updateTravelAlarm(alarm)
                                         } else {
@@ -897,7 +1268,10 @@ fun TravelAlarmScreen(
                                                 active = true,
                                                 ttsEnabled = waypointTts,
                                                 flashEnabled = waypointFlash,
-                                                vibrationEnabled = waypointVibration
+                                                vibrationEnabled = waypointVibration,
+                                                startLabel = startLabelText,
+                                                startLatitude = startLatDouble,
+                                                startLongitude = startLngDouble
                                             )
                                             viewModel.insertTravelAlarm(alarm)
                                         }
@@ -927,6 +1301,23 @@ fun TravelAlarmScreen(
         }
     }
 }
+}
+
+fun getEstimatedTimeBeforeArrivalText(radiusKm: Double, speedKmh: Double, isHindi: Boolean): String {
+    val t = { en: String, hi: String -> if (isHindi) hi else en }
+    if (speedKmh <= 5.0) {
+        val staticMins = (radiusKm / 35.0) * 60.0 // At average city traffic speeds (35 km/h)
+        return t(
+            String.format(Locale.US, "Triggers approx. %.1f mins before arrival (est. at typical city speed of 35 km/h)", staticMins),
+            String.format(Locale.US, "आगमन से लगभग %.1f मिनट पहले बजेगा (35 किमी/घंटा की सामान्य गति के अनुमान पर)", staticMins)
+        )
+    }
+    val mins = (radiusKm / speedKmh) * 60.0
+    return t(
+        String.format(Locale.US, "Triggers approx. %.1f mins before arrival (at current speed of %.1f km/h)", mins, speedKmh),
+        String.format(Locale.US, "आगमन से लगभग %.1f मिनट पहले बजेगा (आपकी वर्तमान लाइव गति %.1f किमी/घंटा पर)", mins, speedKmh)
+    )
+}
 
 @Composable
 fun TravelAlarmCard(
@@ -935,7 +1326,9 @@ fun TravelAlarmCard(
     onDelete: () -> Unit,
     onEdit: () -> Unit,
     onUpdateRadius: (Double) -> Unit,
+    speedKmh: Double = 0.0,
     isHindi: Boolean,
+    isTrackingActive: Boolean,
     t: (String, String) -> String
 ) {
     Card(
@@ -995,22 +1388,22 @@ fun TravelAlarmCard(
 
                 Spacer(modifier = Modifier.width(6.dp))
 
-                IconButton(onClick = onEdit, modifier = Modifier.size(24.dp)) {
+                IconButton(onClick = onEdit, modifier = Modifier.size(24.dp), enabled = !isTrackingActive) {
                     Icon(
                         imageVector = Icons.Default.Edit,
                         contentDescription = "Edit Waypoint",
-                        tint = SleekPrimary.copy(alpha = 0.8f),
+                        tint = if (isTrackingActive) SleekMutedText else SleekPrimary.copy(alpha = 0.8f),
                         modifier = Modifier.size(16.dp)
                     )
                 }
 
                 Spacer(modifier = Modifier.width(6.dp))
 
-                IconButton(onClick = onDelete, modifier = Modifier.size(24.dp)) {
+                IconButton(onClick = onDelete, modifier = Modifier.size(24.dp), enabled = !isTrackingActive) {
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = "Delete Waypoint",
-                        tint = Color(0xFFDC2626).copy(alpha = 0.8f),
+                        tint = if (isTrackingActive) SleekMutedText else Color(0xFFDC2626).copy(alpha = 0.8f),
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -1021,9 +1414,13 @@ fun TravelAlarmCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = t("Alert trigger distance:", "सचेत करने का फासला:"), fontSize = 11.sp, color = SleekMutedText)
                 Text(
-                    text = "${String.format(Locale.US, "%.1f", alarm.radiusKm)} km",
+                    text = t("Trigger alarm before destination:", "कितनी दूरी पहले अलार्म बजे:"),
+                    fontSize = 11.sp,
+                    color = SleekMutedText
+                )
+                Text(
+                    text = "${String.format(Locale.US, "%.1f", alarm.radiusKm)} km before",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = SleekSecondary
@@ -1043,7 +1440,18 @@ fun TravelAlarmCard(
                 modifier = Modifier.height(20.dp)
             )
 
+            // Dynamic timing prediction text
+            val estText = getEstimatedTimeBeforeArrivalText(alarm.radiusKm, speedKmh, isHindi)
+            Text(
+                text = "⏱️ $estText",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                color = SleekPrimary,
+                modifier = Modifier.padding(bottom = 2.dp)
+            )
+
             Row(
+
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
             ) {

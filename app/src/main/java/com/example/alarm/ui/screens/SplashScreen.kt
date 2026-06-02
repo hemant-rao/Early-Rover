@@ -27,6 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.res.stringResource
+import com.example.R
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -87,14 +89,14 @@ fun SplashScreen(onNavigateToDashboard: () -> Unit) {
                 )
                 Icon(
                     imageVector = Icons.Default.WbSunny,
-                    contentDescription = "Solaris Alarms Logo",
+                    contentDescription = stringResource(id = R.string.app_name),
                     tint = SleekSolarAccent,
                     modifier = Modifier.size(56.dp)
                 )
             }
             Spacer(modifier = Modifier.height(24.dp))
             Text(
-                text = "SOLARIS ALARMS",
+                text = stringResource(id = R.string.app_name).uppercase(),
                 fontSize = 28.sp,
                 color = SleekActiveText,
                 fontWeight = FontWeight.Bold,

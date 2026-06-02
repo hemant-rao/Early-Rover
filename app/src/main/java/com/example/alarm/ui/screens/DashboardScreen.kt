@@ -12,6 +12,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.layout.layout
@@ -57,6 +58,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import com.example.alarm.data.Alarm
 import com.example.alarm.opengl.Celestial3DView
 import com.example.alarm.ui.weather.WeatherBackground
@@ -67,6 +69,8 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,6 +80,7 @@ fun DashboardScreen(
     onNavigateToEditAlarm: (id: Int) -> Unit,
     onNavigateToLocation: () -> Unit,
     onNavigateToSettings: () -> Unit,
+    onNavigateToManageCities: () -> Unit,
     requestedTab: Int? = null,
     onTabConsumed: () -> Unit = {}
 ) {
@@ -91,6 +96,7 @@ fun DashboardScreen(
     val darkTheme by viewModel.darkThemeEnabled.collectAsStateWithLifecycle()
     val weather by viewModel.weather.collectAsStateWithLifecycle()
     val savedCities by viewModel.savedCities.collectAsStateWithLifecycle()
+    val tzOffset by viewModel.timezoneOffset.collectAsStateWithLifecycle()
     val headerScope = rememberCoroutineScope()
 
     val formattedDate = remember {
@@ -101,6 +107,45 @@ fun DashboardScreen(
     var showLocationSearchDialog by remember { mutableStateOf(false) }
     var selectedPlanet by remember { mutableStateOf<String?>(null) }
     var activeTab by remember { mutableIntStateOf(0) }
+
+    val activeCityIndex = remember(savedCities, locationName) {
+        savedCities.indexOfFirst { c ->
+            locationName.equals(c.name, true) ||
+                locationName.startsWith(c.name, true) ||
+                c.name.startsWith(locationName, true)
+        }.coerceAtLeast(0)
+    }
+    val pagerState = rememberPagerState(initialPage = activeCityIndex) { savedCities.size }
+    var totalDragAmount by remember { mutableStateOf(0f) }
+
+    val swipeModifier = if (savedCities.size > 1) {
+        Modifier.pointerInput(savedCities, pagerState) {
+            detectHorizontalDragGestures(
+                onDragStart = { _ ->
+                    totalDragAmount = 0f
+                },
+                onDragEnd = {
+                    val threshold = 120f
+                    if (totalDragAmount < -threshold) {
+                        val nextIdx = (pagerState.currentPage + 1) % savedCities.size
+                        headerScope.launch {
+                            pagerState.animateScrollToPage(nextIdx)
+                        }
+                    } else if (totalDragAmount > threshold) {
+                        val prevIdx = (pagerState.currentPage - 1 + savedCities.size) % savedCities.size
+                        headerScope.launch {
+                            pagerState.animateScrollToPage(prevIdx)
+                        }
+                    }
+                },
+                onDragCancel = {},
+                onHorizontalDrag = { change, dragAmount ->
+                    change.consume()
+                    totalDragAmount += dragAmount
+                }
+            )
+        }
+    } else Modifier
 
     // Honor a tab requested from a tapped notification, then clear it so manual
     // tab switches aren't overridden on later recompositions.
@@ -147,9 +192,26 @@ fun DashboardScreen(
         }
     }
 
+    val isDayAtLocation = remember(weather, tzOffset) {
+        val rawIsDay = weather?.isDay
+        if (rawIsDay != null) {
+            rawIsDay
+        } else {
+            try {
+                val utcInstant = java.time.Instant.now()
+                val offsetSeconds = (tzOffset * 3600).toLong()
+                val zoneOffset = java.time.ZoneOffset.ofTotalSeconds(offsetSeconds.toInt())
+                val localizedDateTime = java.time.OffsetDateTime.ofInstant(utcInstant, zoneOffset)
+                localizedDateTime.hour in 6..17
+            } catch (e: Exception) {
+                java.time.LocalTime.now().hour in 6..17
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
       // Location-aware animated weather sky behind everything
-      WeatherBackground(weather = weather, modifier = Modifier.fillMaxSize())
+      WeatherBackground(weather = weather, isDayOverride = isDayAtLocation, modifier = Modifier.fillMaxSize())
       // Readability scrim so cards and text stay legible over the sky
       Box(
           modifier = Modifier
@@ -323,7 +385,7 @@ fun DashboardScreen(
             }
         }
     ) { innerPadding ->
-        Box(modifier = Modifier.fillMaxSize().padding(bottom = innerPadding.calculateBottomPadding())) {
+        Box(modifier = Modifier.fillMaxSize().then(swipeModifier).padding(bottom = innerPadding.calculateBottomPadding())) {
             when (activeTab) {
                 0 -> { // DASH
                     LazyColumn(
@@ -351,176 +413,29 @@ fun DashboardScreen(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "DIG DEEP DELETE",
+                                        text = "SOLAR ALARM",
                                         style = MaterialTheme.typography.titleMedium.copy(
                                             fontWeight = FontWeight.Black,
                                             color = SleekPrimary,
                                             letterSpacing = 1.2.sp
                                         )
                                     )
-                                    
-                                    // Visual indicator representing live sync
-                                    Row(
-                                        modifier = Modifier
-                                            .background(SleekCardBg, RoundedCornerShape(12.dp))
-                                            .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(12.dp))
-                                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(6.dp)
-                                                .background(Color(0xFF10B981), CircleShape)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        val w = weather
-                                        Text(
-                                            text = if (w != null && !w.temperatureC.isNaN())
-                                                "${w.temperatureC.toInt()}°C • ${w.description.uppercase()}"
-                                            else viewModel.translate("SOLARIS LIVE"),
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = SleekMutedText
-                                        )
-                                    }
                                 }
                                 
                                 Spacer(modifier = Modifier.height(4.dp))
                                 
                                 // Interactive location header: active name (swipeable) + saved-location
                                 // dots + an add (+) button. Swiping or tapping a dot switches location.
-                                if (savedCities.isEmpty()) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.LocationOn,
-                                            contentDescription = null,
-                                            tint = SleekSecondary,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = locationName.ifEmpty { "Reykjavík, IS" },
-                                            style = MaterialTheme.typography.titleLarge.copy(
-                                                fontWeight = FontWeight.Bold,
-                                                color = SleekActiveText
-                                            ),
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .clickable { showLocationSearchDialog = true }
-                                        )
-                                        IconButton(
-                                            onClick = { showLocationSearchDialog = true },
-                                            modifier = Modifier.size(28.dp).testTag("add_location_header_button")
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.AddCircle,
-                                                contentDescription = "Add New Location",
-                                                tint = SleekPrimary,
-                                                modifier = Modifier.size(24.dp)
-                                            )
-                                        }
-                                    }
-                                } else {
-                                    val activeCityIndex = remember(savedCities, locationName) {
-                                        savedCities.indexOfFirst { c ->
-                                            locationName.equals(c.name, true) ||
-                                                locationName.startsWith(c.name, true) ||
-                                                c.name.startsWith(locationName, true)
-                                        }.coerceAtLeast(0)
-                                    }
-                                    val pagerState = rememberPagerState(initialPage = activeCityIndex) { savedCities.size }
-
-                                    // External location change (e.g. via search dialog) -> move the pager.
-                                    LaunchedEffect(activeCityIndex, savedCities.size) {
-                                        if (activeCityIndex in savedCities.indices &&
-                                            pagerState.currentPage != activeCityIndex
-                                        ) {
-                                            pagerState.animateScrollToPage(activeCityIndex)
-                                        }
-                                    }
-                                    // User swipe/dot tap settles on a page -> make that location active.
-                                    // drop(1) skips the initial emission so we never override an
-                                    // unsaved/auto-detected active location on first composition.
-                                    LaunchedEffect(pagerState, savedCities) {
-                                        snapshotFlow { pagerState.currentPage }
-                                            .drop(1)
-                                            .collect { page ->
-                                                val c = savedCities.getOrNull(page) ?: return@collect
-                                                // Same symmetric match as activeCityIndex, so the two
-                                                // effects agree and never fight.
-                                                val matches = locationName.equals(c.name, true) ||
-                                                    locationName.startsWith(c.name, true) ||
-                                                    c.name.startsWith(locationName, true)
-                                                if (!matches) viewModel.setManualCitySelection(c)
-                                            }
-                                    }
-
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.LocationOn,
-                                            contentDescription = null,
-                                            tint = SleekSecondary,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        HorizontalPager(
-                                            state = pagerState,
-                                            modifier = Modifier.weight(1f)
-                                        ) { page ->
-                                            Text(
-                                                text = savedCities[page].name,
-                                                style = MaterialTheme.typography.titleLarge.copy(
-                                                    fontWeight = FontWeight.Bold,
-                                                    color = SleekActiveText
-                                                ),
-                                                maxLines = 1,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clickable { showLocationSearchDialog = true }
-                                            )
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        // Saved-location dots (one per city), tappable to switch.
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            savedCities.indices.forEach { i ->
-                                                val selected = i == pagerState.currentPage
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(if (selected) 8.dp else 6.dp)
-                                                        .background(
-                                                            if (selected) SleekPrimary
-                                                            else SleekMutedText.copy(alpha = 0.4f),
-                                                            CircleShape
-                                                        )
-                                                        .clickable {
-                                                            headerScope.launch { pagerState.animateScrollToPage(i) }
-                                                        }
-                                                )
-                                            }
-                                        }
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        IconButton(
-                                            onClick = { showLocationSearchDialog = true },
-                                            modifier = Modifier.size(28.dp).testTag("add_location_header_button")
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.AddCircle,
-                                                contentDescription = "Add New Location",
-                                                tint = SleekPrimary,
-                                                modifier = Modifier.size(24.dp)
-                                            )
-                                        }
-                                    }
-                                }
+                                LocationHeader(
+                                    savedCities = savedCities,
+                                    locationName = locationName,
+                                    activeCityIndex = activeCityIndex,
+                                    pagerState = pagerState,
+                                    headerScope = headerScope,
+                                    viewModel = viewModel,
+                                    onAddLocationClick = { showLocationSearchDialog = true },
+                                    onManageCitiesClick = onNavigateToManageCities
+                                )
                             }
                         }
 
@@ -545,15 +460,17 @@ fun DashboardScreen(
                                             )
                                     )
 
-                                    Celestial3DView(
-                                        modifier = Modifier.fillMaxSize(),
-                                        sunriseTime = sunrise,
-                                        sunsetTime = sunset,
-                                        activeAlarms = alarms.filter { it.active }.map { Pair(it.hour, it.minute) },
-                                        isDark = darkTheme,
-                                        animateOrbits = true,
-                                        onPlanetSelected = { selectedPlanet = it }
-                                    )
+                                    if (!showLocationSearchDialog) {
+                                        Celestial3DView(
+                                            modifier = Modifier.fillMaxSize(),
+                                            sunriseTime = sunrise,
+                                            sunsetTime = sunset,
+                                            activeAlarms = alarms.filter { it.active }.map { Pair(it.hour, it.minute) },
+                                            isDark = darkTheme,
+                                            animateOrbits = true,
+                                            onPlanetSelected = { selectedPlanet = it }
+                                        )
+                                    }
                                 }
 
                                 Row(
@@ -589,10 +506,12 @@ fun DashboardScreen(
 
                         // 2. SLEEK WEATHER SECTION (Moved lower under the Solar scene!)
                         item {
-                            SleekWeatherSection(
-                                viewModel = viewModel,
-                                onChangeLocationClick = { showLocationSearchDialog = true }
-                            )
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                SleekWeatherSection(
+                                    viewModel = viewModel,
+                                    onChangeLocationClick = { showLocationSearchDialog = true }
+                                )
+                            }
                         }
 
                         // 3. NEXT ALARM GRADIENT HERO CARD
@@ -809,12 +728,14 @@ fun DashboardScreen(
                             }
                         } else {
                             items(alarms, key = { it.id }) { alarm ->
-                                SleekAlarmItemRow(
-                                    alarm = alarm,
-                                    onRowClick = { onNavigateToEditAlarm(alarm.id) },
-                                    onToggleActive = { viewModel.toggleAlarmActive(alarm) },
-                                    onDeleteClick = { viewModel.deleteAlarm(alarm) }
-                                )
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    SleekAlarmItemRow(
+                                        alarm = alarm,
+                                        onRowClick = { onNavigateToEditAlarm(alarm.id) },
+                                        onToggleActive = { viewModel.toggleAlarmActive(alarm) },
+                                        onDeleteClick = { viewModel.deleteAlarm(alarm) }
+                                    )
+                                }
                             }
                         }
                     }
@@ -834,34 +755,22 @@ fun DashboardScreen(
                         verticalArrangement = Arrangement.spacedBy(20.dp)
                     ) {
                         item {
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                Text(
-                                    text = "LIVE WEATHER RADAR HUB",
-                                    style = MaterialTheme.typography.titleMedium.copy(
-                                        fontWeight = FontWeight.Black,
-                                        color = SleekPrimary,
-                                        letterSpacing = 1.2.sp
-                                    )
-                                )
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Text(
-                                    text = "Explore real-time weather, solar dynamics, and astronomical predictions.",
-                                    fontSize = 12.sp,
-                                    color = SleekMutedText
-                                )
-                            }
-                        }
-
-                        item {
-                            LocationCarouselSection(
+                            LocationHeader(
+                                savedCities = savedCities,
+                                locationName = locationName,
+                                activeCityIndex = activeCityIndex,
+                                pagerState = pagerState,
+                                headerScope = headerScope,
                                 viewModel = viewModel,
-                                onAddLocationClick = { showLocationSearchDialog = true }
+                                onAddLocationClick = { showLocationSearchDialog = true },
+                                onManageCitiesClick = onNavigateToManageCities
                             )
                         }
 
                         item {
                             SleekWeatherSection(
                                 viewModel = viewModel,
+                                modifier = Modifier.fillMaxWidth(),
                                 onChangeLocationClick = { showLocationSearchDialog = true }
                             )
                         }
@@ -967,6 +876,7 @@ fun DashboardScreen(
 
     if (showLocationSearchDialog) {
         LocationSearchDialog(
+            initialQuery = locationName,
             viewModel = viewModel,
             onUseMyLocationClick = {
                 dashboardPermissionLauncher.launch(
@@ -1070,14 +980,24 @@ fun SleekAlarmItemRow(
                     )
                 }
 
+                val titleDefault = if (alarm.title.isNotEmpty()) alarm.title else when (alarm.alarmType) {
+                    "SUNRISE" -> "Sunrise Tracker"
+                    "SUNSET" -> "Sunset Tracker"
+                    else -> "Manual Alarm"
+                }
+
                 val trackerDesc = when (alarm.alarmType) {
-                    "SUNRISE" -> "Sunrise " + if (alarm.offsetMinutes == 0) "exactly" else if (alarm.offsetMinutes < 0) "${-alarm.offsetMinutes}m before" else "${alarm.offsetMinutes}m after"
-                    "SUNSET" -> "Sunset " + if (alarm.offsetMinutes == 0) "exactly" else if (alarm.offsetMinutes < 0) "${-alarm.offsetMinutes}m before" else "${alarm.offsetMinutes}m after"
-                    else -> alarm.title.ifEmpty { "Manual Alarm" }
+                    "SUNRISE", "SUNSET" -> {
+                        val exactPart = if (alarm.ringAtExactAlso) "exactly + " else ""
+                        val offsetPart = if (alarm.offsetMinutes == 0) (if (!alarm.ringAtExactAlso) "exactly based" else "(no offset)") else if (alarm.offsetMinutes < 0) "${-alarm.offsetMinutes}m before" else "${alarm.offsetMinutes}m after"
+                        val desc = "$exactPart$offsetPart".trimEnd(' ', '+')
+                        desc
+                    }
+                    else -> if (alarm.title.isEmpty()) "Standard Clock Alarm" else ""
                 }
 
                 Text(
-                    text = trackerDesc,
+                    text = titleDefault + if (trackerDesc.isNotEmpty()) " - $trackerDesc" else "",
                     fontSize = 12.sp,
                     color = if (alarm.active) SleekMutedText else SleekMutedText.copy(alpha = 0.5f),
                     fontWeight = FontWeight.Normal
@@ -1220,13 +1140,22 @@ private fun getDailyRepeaterString(days: List<Int>): String {
 
 @Composable
 fun LocationSearchDialog(
+    initialQuery: String,
     viewModel: AlarmViewModel,
     onUseMyLocationClick: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery by remember { mutableStateOf(initialQuery) }
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
     val isSearching = searchQuery.isNotEmpty()
+    
+    LaunchedEffect(Unit) {
+        if (initialQuery.isNotEmpty()) {
+            // Optional: call searchLocationQuery when dialog opens so matches show up.
+            kotlinx.coroutines.delay(100) // slight delay to allow keyboard controller to mount if needed, or just let user search.
+            viewModel.searchLocationQuery(initialQuery)
+        }
+    }
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
@@ -1238,12 +1167,13 @@ fun LocationSearchDialog(
     val maxResultsHeight = (configuration.screenHeightDp * 0.42f).dp
 
     // Once the user starts scrolling the results, drop the keyboard so the full list is visible.
-    LaunchedEffect(resultsListState.isScrollInProgress) {
-        if (resultsListState.isScrollInProgress) {
-            keyboardController?.hide()
-            focusManager.clearFocus()
-        }
-    }
+    // val isDragged by resultsListState.interactionSource.collectIsDraggedAsState()
+    // LaunchedEffect(isDragged) {
+    //     if (isDragged) {
+    //         keyboardController?.hide()
+    //         focusManager.clearFocus()
+    //     }
+    // }
 
     // Modern focus requester to open keyboard automatically
     val focusRequester = remember { FocusRequester() }
@@ -1410,47 +1340,42 @@ fun LocationSearchDialog(
                     Box(modifier = Modifier.heightIn(max = maxResultsHeight)) {
                         LazyColumn(
                             state = resultsListState,
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalArrangement = Arrangement.Top
                         ) {
                             items(searchResults) { city ->
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            viewModel.addSavedCity(city)
-                                            onDismiss()
-                                        }
-                                        .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(10.dp)),
-                                    shape = RoundedCornerShape(10.dp),
-                                    colors = CardDefaults.cardColors(containerColor = SleekBackground)
-                                ) {
+                                Column {
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .padding(10.dp),
+                                            .clickable {
+                                                viewModel.addSavedCity(city)
+                                                onDismiss()
+                                            }
+                                            .padding(vertical = 14.dp, horizontal = 12.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.LocationCity,
                                             contentDescription = null,
-                                            tint = SleekSecondary,
-                                            modifier = Modifier.size(16.dp)
+                                            tint = SleekMutedText,
+                                            modifier = Modifier.size(20.dp)
                                         )
-                                        Spacer(modifier = Modifier.width(10.dp))
+                                        Spacer(modifier = Modifier.width(16.dp))
                                         Column {
                                             Text(
                                                 text = "${city.name}, ${city.country}",
-                                                fontWeight = FontWeight.Bold,
+                                                fontWeight = FontWeight.SemiBold,
                                                 color = SleekActiveText,
-                                                fontSize = 12.sp
+                                                fontSize = 14.sp
                                             )
                                             Text(
-                                                text = "Lat: ${city.latitude} | Lng: ${city.longitude}",
-                                                fontSize = 9.sp,
+                                                text = "Lat: ${String.format(Locale.US,"%.2f", city.latitude)} | Lng: ${String.format(Locale.US,"%.2f", city.longitude)}",
+                                                fontSize = 11.sp,
                                                 color = SleekMutedText
                                             )
                                         }
                                     }
+                                    HorizontalDivider(color = SleekBorder.copy(alpha = 0.5f), modifier = Modifier.padding(start = 48.dp, end = 12.dp))
                                 }
                             }
                         }
@@ -1518,18 +1443,6 @@ fun SleekWeatherSection(
                         strokeWidth = 2.dp,
                         color = SleekPrimary
                     )
-                } else {
-                    IconButton(
-                        onClick = onChangeLocationClick,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = "Search Location",
-                            tint = SleekSecondary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
                 }
             }
 
@@ -1560,48 +1473,36 @@ fun SleekWeatherSection(
             } else {
                 val weather = detailedWeather!!
                 
-                // Tabs switcher using native standard buttons
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(SleekBackground.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    val tabs = listOf("TODAY", "FORECAST (10D)", "HISTORY (10D)")
-                    tabs.forEachIndexed { idx, label ->
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (selectedTab == idx) SleekPrimary else Color.Transparent)
-                                .clickable { 
-                                    selectedTab = idx
-                                    expandedDayIso = null // collapse day detail
-                                }
-                                .padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = translateWeatherText(label, lang),
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (selectedTab == idx) Color.White else SleekMutedText
-                            )
-                        }
-                    }
-                }
-
                 Spacer(modifier = Modifier.height(16.dp))
 
-                when (selectedTab) {
-                    0 -> { // TODAY Tab
+                // TODAY Section
+                val tzOffset = viewModel.timezoneOffset.value
+                        val localTimeStr = try {
+                            val utcInstant = java.time.Instant.now()
+                            val offsetSeconds = (tzOffset * 3600).toLong()
+                            val zoneOffset = java.time.ZoneOffset.ofTotalSeconds(offsetSeconds.toInt())
+                            val localizedDateTime = java.time.OffsetDateTime.ofInstant(utcInstant, zoneOffset)
+                            localizedDateTime.format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a"))
+                        } catch (e: java.lang.Exception) {
+                            ""
+                        }
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column {
-                                Row(verticalAlignment = Alignment.Bottom) {
+                                if (localTimeStr.isNotEmpty()) {
+                                    Text(
+                                        text = localTimeStr,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SleekPrimary
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
                                         text = "${weather.current.temperatureC.toInt()}°",
                                         fontSize = 44.sp,
@@ -1614,9 +1515,7 @@ fun SleekWeatherSection(
                                         imageVector = icon,
                                         contentDescription = null,
                                         tint = color,
-                                        modifier = Modifier
-                                            .size(36.dp)
-                                            .padding(bottom = 6.dp)
+                                        modifier = Modifier.size(36.dp)
                                     )
                                 }
                                 Text(
@@ -1705,7 +1604,7 @@ fun SleekWeatherSection(
                                             color = SleekMutedText,
                                             textAlign = TextAlign.Center
                                         )
-                                        val (icon, color) = getWeatherIconAndColor(hour.condition, true)
+                                        val (icon, color) = getWeatherIconAndColor(hour.condition, isIsoTimeDaytime(hour.timeIso))
                                         Icon(
                                             imageVector = icon,
                                             contentDescription = null,
@@ -1728,152 +1627,209 @@ fun SleekWeatherSection(
                                 }
                             }
                         }
-                    }
-
-                    1, 2 -> { // FORECAST (1) or HISTORY (2) Tab
-                        val isForecast = selectedTab == 1
-                        val todayDate = LocalDate.now()
                         
-                        val daysList = if (isForecast) {
-                            weather.dailyList.filter {
-                                try {
-                                    val d = LocalDate.parse(it.dateIso)
-                                    !d.isBefore(todayDate)
-                                } catch(e: Exception) {
-                                    true
-                                }
-                            }.take(10)
-                        } else {
-                            weather.dailyList.filter {
-                                try {
-                                    val d = LocalDate.parse(it.dateIso)
-                                    d.isBefore(todayDate)
-                                } catch(e: Exception) {
-                                    false
-                                }
-                            }.takeLast(10)
+                        Spacer(modifier = Modifier.height(24.dp))
+                        
+                        // FORECAST
+                        var isForecastExpanded by remember { mutableStateOf(false) }
+                        var isHistoryExpanded by remember { mutableStateOf(false) }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isForecastExpanded = !isForecastExpanded }
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = translateWeatherText("FORECAST (NEXT 10 DAYS)", lang),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = SleekSecondary,
+                                letterSpacing = 0.5.sp
+                            )
+                            Icon(
+                                imageVector = if (isForecastExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = SleekSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
 
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            daysList.forEach { day ->
-                                val isExpanded = expandedDayIso == day.dateIso
-                                
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(SleekBackground.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
-                                        .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(16.dp))
-                                        .clickable { 
-                                            expandedDayIso = if (isExpanded) null else day.dateIso
-                                        }
-                                        .padding(12.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column {
-                                            Text(
-                                                text = formatIsoDateToReadable(day.dateIso),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 14.sp,
-                                                color = SleekActiveText
-                                            )
-                                            val descriptionText = when (day.condition) {
-                                                com.example.alarm.weather.WeatherCondition.CLEAR -> "Clear sky"
-                                                com.example.alarm.weather.WeatherCondition.FEW_CLOUDS -> "Partly cloudy"
-                                                com.example.alarm.weather.WeatherCondition.CLOUDS -> "Cloudy"
-                                                com.example.alarm.weather.WeatherCondition.FOG -> "Foggy"
-                                                com.example.alarm.weather.WeatherCondition.RAIN -> "Rain"
-                                                com.example.alarm.weather.WeatherCondition.SNOW -> "Snow"
-                                                com.example.alarm.weather.WeatherCondition.THUNDER -> "Thunderstorm"
-                                            }
-                                            Text(
-                                                text = translateWeatherText(descriptionText, lang),
-                                                fontSize = 11.sp,
-                                                color = SleekMutedText
-                                            )
-                                        }
+                        if (isForecastExpanded) {
+                            val forecastDaysList = weather.dailyList.filter {
+                                try {
+                                    val d = LocalDate.parse(it.dateIso)
+                                    !d.isBefore(LocalDate.now())
+                                } catch(e: Exception) { true }
+                            }.take(10)
+                            WeatherDaysList(weather, forecastDaysList, expandedDayIso, { expandedDayIso = it }, lang)
+                        }
 
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            val (icon, color) = getWeatherIconAndColor(day.condition, true)
-                                            Icon(
-                                                imageVector = icon,
-                                                contentDescription = null,
-                                                tint = color,
-                                                modifier = Modifier.size(22.dp)
-                                            )
-                                            Text(
-                                                text = "${day.maxTempC.toInt()}° / ${day.minTempC.toInt()}°",
-                                                fontWeight = FontWeight.Black,
-                                                fontSize = 13.sp,
-                                                color = SleekActiveText
-                                            )
-                                        }
-                                    }
+                        HorizontalDivider(color = SleekBorder.copy(alpha = 0.3f), modifier = Modifier.padding(vertical = 8.dp))
 
-                                    // Display direct hourly details on accordion expansion
-                                    if (isExpanded) {
-                                        Spacer(modifier = Modifier.height(10.dp))
-                                        Divider(color = SleekBorder.copy(alpha = 0.3f))
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        
-                                        Text(
-                                            text = translateWeatherText("Hourly Details for Day", lang),
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = SleekSecondary,
-                                            letterSpacing = 0.5.sp,
-                                            modifier = Modifier.padding(bottom = 8.dp)
-                                        )
+                        // HISTORY
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isHistoryExpanded = !isHistoryExpanded }
+                                .padding(vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = translateWeatherText("HISTORY (LAST 10 DAYS)", lang),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = SleekSecondary,
+                                letterSpacing = 0.5.sp
+                            )
+                            Icon(
+                                imageVector = if (isHistoryExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                contentDescription = null,
+                                tint = SleekSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
 
-                                        val dayHourlyRecords = weather.hourlyList.filter { it.timeIso.startsWith(day.dateIso) }
+                        if (isHistoryExpanded) {
+                            val historyDaysList = weather.dailyList.filter {
+                                try {
+                                    val d = LocalDate.parse(it.dateIso)
+                                    d.isBefore(LocalDate.now())
+                                } catch(e: Exception) { false }
+                            }.takeLast(10)
+                            WeatherDaysList(weather, historyDaysList, expandedDayIso, { expandedDayIso = it }, lang)
+                        }
+                    }
+                }
+            }
+        }
 
-                                        androidx.compose.foundation.lazy.LazyRow(
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            items(dayHourlyRecords) { hour ->
-                                                Column(
-                                                    modifier = Modifier
-                                                        .background(SleekBackground.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-                                                        .padding(vertical = 6.dp, horizontal = 10.dp),
-                                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                                                ) {
-                                                    Text(
-                                                        text = formatIsoTimeToHour(hour.timeIso).substringBefore(" "), // e.g. "04:00"
-                                                        fontSize = 8.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = SleekMutedText
-                                                    )
-                                                    Text(
-                                                        text = formatIsoTimeToHour(hour.timeIso).substringAfter(" "), // e.g. "PM"
-                                                        fontSize = 7.sp,
-                                                        color = SleekMutedText
-                                                    )
-                                                    val (hIcon, hCol) = getWeatherIconAndColor(hour.condition, true)
-                                                    Icon(
-                                                        imageVector = hIcon,
-                                                        contentDescription = null,
-                                                        tint = hCol,
-                                                        modifier = Modifier.size(14.dp)
-                                                    )
-                                                    Text(
-                                                        text = "${hour.temperatureC.toInt()}°",
-                                                        fontSize = 11.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = SleekActiveText
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+@Composable
+fun WeatherDaysList(
+    weather: com.example.alarm.weather.DetailedWeatherInfo,
+    daysList: List<com.example.alarm.weather.DailyDetail>,
+    expandedDayIso: String?,
+    onExpandDay: (String?) -> Unit,
+    lang: String
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        daysList.forEach { day ->
+            val isExpanded = expandedDayIso == day.dateIso
+            
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(SleekBackground.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+                    .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(16.dp))
+                    .clickable { 
+                        onExpandDay(if (isExpanded) null else day.dateIso)
+                    }
+                    .padding(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = formatIsoDateToReadable(day.dateIso),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = SleekActiveText
+                        )
+                        val descriptionText = when (day.condition) {
+                            com.example.alarm.weather.WeatherCondition.CLEAR -> "Clear sky"
+                            com.example.alarm.weather.WeatherCondition.FEW_CLOUDS -> "Partly cloudy"
+                            com.example.alarm.weather.WeatherCondition.CLOUDS -> "Cloudy"
+                            com.example.alarm.weather.WeatherCondition.FOG -> "Foggy"
+                            com.example.alarm.weather.WeatherCondition.RAIN -> "Rain"
+                            com.example.alarm.weather.WeatherCondition.SNOW -> "Snow"
+                            com.example.alarm.weather.WeatherCondition.THUNDER -> "Thunderstorm"
+                        }
+                        Text(
+                            text = translateWeatherText(descriptionText, lang),
+                            fontSize = 11.sp,
+                            color = SleekMutedText
+                        )
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        val (icon, color) = getWeatherIconAndColor(day.condition, true)
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = color,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "${day.maxTempC.toInt()}° / ${day.minTempC.toInt()}°",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 13.sp,
+                            color = SleekActiveText
+                        )
+                    }
+                }
+
+                // Display direct hourly details on accordion expansion
+                if (isExpanded) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    HorizontalDivider(color = SleekBorder.copy(alpha = 0.3f))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
+                    Text(
+                        text = translateWeatherText("Hourly Details for Day", lang),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = SleekSecondary,
+                        letterSpacing = 0.5.sp,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+
+                    val dayHourlyRecords = weather.hourlyList.filter { it.timeIso.startsWith(day.dateIso) }
+
+                    androidx.compose.foundation.lazy.LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        items(dayHourlyRecords) { hour ->
+                            Column(
+                                modifier = Modifier
+                                    .background(SleekBackground.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                                    .padding(vertical = 6.dp, horizontal = 10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = formatIsoTimeToHour(hour.timeIso).substringBefore(" "), // e.g. "04:00"
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SleekMutedText
+                                )
+                                Text(
+                                    text = formatIsoTimeToHour(hour.timeIso).substringAfter(" "), // e.g. "PM"
+                                    fontSize = 7.sp,
+                                    color = SleekMutedText
+                                )
+                                val (hIcon, hCol) = getWeatherIconAndColor(hour.condition, isIsoTimeDaytime(hour.timeIso))
+                                Icon(
+                                    imageVector = hIcon,
+                                    contentDescription = null,
+                                    tint = hCol,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "${hour.temperatureC.toInt()}°",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SleekActiveText
+                                )
                             }
                         }
                     }
@@ -1921,14 +1877,20 @@ fun getWeatherIconAndColor(condition: com.example.alarm.weather.WeatherCondition
     return when (condition) {
         com.example.alarm.weather.WeatherCondition.CLEAR -> {
             if (isDay) Icons.Default.WbSunny to Color(0xFFFFB347)
-            else Icons.Default.Star to Color(0xFF90CAF9)
+            else Icons.Default.NightsStay to Color(0xFF90CAF9)
         }
-        com.example.alarm.weather.WeatherCondition.FEW_CLOUDS -> Icons.Default.Cloud to Color(0xFFE2E8F0)
+        com.example.alarm.weather.WeatherCondition.FEW_CLOUDS -> {
+            if (isDay) Icons.Default.Cloud to Color(0xFFE2E8F0)
+            else Icons.Default.NightsStay to Color(0xFF90CAF9)
+        }
         com.example.alarm.weather.WeatherCondition.CLOUDS -> Icons.Default.Cloud to Color(0xFF94A3B8)
         com.example.alarm.weather.WeatherCondition.FOG -> Icons.Default.Menu to Color(0xFFA5F3FC)
         com.example.alarm.weather.WeatherCondition.RAIN -> Icons.Default.InvertColors to Color(0xFF60A5FA)
-        com.example.alarm.weather.WeatherCondition.SNOW -> Icons.Default.Star to Color(0xFFE2E8F0)
-        com.example.alarm.weather.WeatherCondition.THUNDER -> Icons.Default.WbSunny to Color(0xFFFBBF24)
+        com.example.alarm.weather.WeatherCondition.SNOW -> {
+            if (isDay) Icons.Default.Star to Color(0xFFE2E8F0)
+            else Icons.Default.NightsStay to Color(0xFF90CAF9)
+        }
+        com.example.alarm.weather.WeatherCondition.THUNDER -> Icons.Default.FlashOn to Color(0xFFFBBF24)
     }
 }
 
@@ -1947,6 +1909,16 @@ fun formatIsoTimeToHour(isoTime: String): String {
         dt.format(java.time.format.DateTimeFormatter.ofPattern("hh:00 a"))
     } catch(e: Exception) {
         if (isoTime.contains("T")) isoTime.substringAfter("T") else isoTime
+    }
+}
+
+fun isIsoTimeDaytime(isoTime: String): Boolean {
+    return try {
+        val dt = java.time.LocalDateTime.parse(isoTime)
+        val hour = dt.hour
+        hour in 6..17
+    } catch(e: Exception) {
+        true
     }
 }
 
@@ -2074,7 +2046,7 @@ fun LocationCarouselSection(
                         color = if (isActive) Color.White else SleekActiveText
                     )
                     
-                    if (!isActive && savedCities.size > 1) {
+                    if (!isActive) {                
                         Spacer(modifier = Modifier.width(6.dp))
                         Icon(
                             imageVector = Icons.Default.Close,

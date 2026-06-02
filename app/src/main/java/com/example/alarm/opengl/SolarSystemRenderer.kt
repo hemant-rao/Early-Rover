@@ -160,8 +160,8 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
             // Combined projection*view for projecting body world positions to screen pixels.
             Matrix.multiplyMM(projView, 0, projection, 0, view, 0)
             // Local buffer filled this frame: index 0 = Sun, 1..8 = planets (PLANETS order).
-            val sp = FloatArray(9 * 2) { -1f }
-            projectToScreen(0f, 0f, 0f)?.let { sp[0] = it[0]; sp[1] = it[1] }
+            val screenPositions = FloatArray(9 * 2) { -1f }
+            projectToScreen(0f, 0f, 0f)?.let { screenPositions[0] = it[0]; screenPositions[1] = it[1] }
 
             // --- starfield (far, depth write off) ---
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
@@ -202,7 +202,7 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
                 val z = p.orbit * sin(ang)
 
                 // Project this planet's world centre to screen pixels for tap picking.
-                projectToScreen(x, 0f, z)?.let { sp[(i + 1) * 2] = it[0]; sp[(i + 1) * 2 + 1] = it[1] }
+                projectToScreen(x, 0f, z)?.let { screenPositions[(i + 1) * 2] = it[0]; screenPositions[(i + 1) * 2 + 1] = it[1] }
 
                 Matrix.setIdentityM(model, 0)
                 Matrix.translateM(model, 0, x, 0f, z)
@@ -235,7 +235,7 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
             }
 
             // Publish this frame's projected screen positions for UI-thread tap picking.
-            screenPos = sp
+            screenPos = screenPositions
         } catch (e: Exception) {
             android.util.Log.e("SolarSystemRenderer", "Frame composition failed gracefully: ", e)
         }

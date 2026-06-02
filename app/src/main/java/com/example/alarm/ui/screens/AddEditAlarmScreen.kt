@@ -247,22 +247,33 @@ fun AddEditAlarmScreen(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
                                 .clickable {
-                                    val checked = alarm.offsetMinutes != 0
-                                    viewModel.editingAlarm.value = if (checked) {
-                                        alarm.copy(offsetMinutes = 0)
+                                    val wasChecked = alarm.ringAtExactAlso || alarm.offsetMinutes == 0
+                                    if (wasChecked) {
+                                        // Turn off exact time. If offset was 0, default to some offset.
+                                        viewModel.editingAlarm.value = if (alarm.offsetMinutes == 0) {
+                                            alarm.copy(offsetMinutes = -15, ringAtExactAlso = false)
+                                        } else {
+                                            alarm.copy(ringAtExactAlso = false)
+                                        }
                                     } else {
-                                        alarm.copy(offsetMinutes = -15) // default back to 15m before
+                                        // Turn on exact time. If they didn't have an offset, it's just exact.
+                                        viewModel.editingAlarm.value = alarm.copy(ringAtExactAlso = true)
                                     }
                                 }
                                 .padding(vertical = 8.dp)
                         ) {
+                            val isExactChecked = alarm.ringAtExactAlso || alarm.offsetMinutes == 0
                             Checkbox(
-                                checked = alarm.offsetMinutes == 0,
+                                checked = isExactChecked,
                                 onCheckedChange = { checked ->
-                                    viewModel.editingAlarm.value = if (checked) {
-                                        alarm.copy(offsetMinutes = 0)
+                                    if (!checked) {
+                                        viewModel.editingAlarm.value = if (alarm.offsetMinutes == 0) {
+                                            alarm.copy(offsetMinutes = -15, ringAtExactAlso = false)
+                                        } else {
+                                            alarm.copy(ringAtExactAlso = false)
+                                        }
                                     } else {
-                                        alarm.copy(offsetMinutes = -15)
+                                        viewModel.editingAlarm.value = alarm.copy(ringAtExactAlso = true)
                                     }
                                 },
                                 colors = CheckboxDefaults.colors(checkedColor = SleekPrimary)
@@ -283,58 +294,56 @@ fun AddEditAlarmScreen(
                             }
                         }
 
-                        if (alarm.offsetMinutes != 0) {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text(
-                                text = viewModel.translate("Fires weekly during selected days"),
-                                fontSize = 13.sp,
-                                color = SleekMutedText
-                            )
-                            Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = viewModel.translate("Also trigger at offset time"),
+                            fontSize = 13.sp,
+                            color = SleekMutedText
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
 
-                            // Offset choices
-                            val offsets = listOf(-30, -15, -10, -5, 5, 10, 15, 30)
-                            
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                offsets.forEach { offset ->
-                                    val selected = alarm.offsetMinutes == offset
-                                    val labelText = when {
-                                        offset < 0 -> "${-offset}m ${viewModel.translate("Before")}"
-                                        offset > 0 -> "${offset}m ${viewModel.translate("After")}"
-                                        else -> viewModel.translate("At Event")
-                                    }
-                                    
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(
-                                                if (selected) SleekPrimary else SleekBorder.copy(alpha = 0.5f)
-                                            )
-                                            .clickable {
-                                                viewModel.editingAlarm.value = alarm.copy(offsetMinutes = offset)
-                                            }
-                                            .border(
-                                                BorderStroke(
-                                                    width = 1.dp,
-                                                    color = if (selected) SleekSecondary else Color.Transparent
-                                                ),
-                                                shape = RoundedCornerShape(12.dp)
-                                            )
-                                            .padding(horizontal = 14.dp, vertical = 10.dp)
-                                    ) {
-                                        Text(
-                                            text = labelText,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (selected) Color.White else SleekMutedText
+                        // Offset choices
+                        val offsets = listOf(-30, -15, -10, -5, 0, 5, 10, 15, 30) // 0 implies ONLY the exact time
+                        
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            offsets.forEach { offset ->
+                                val selected = alarm.offsetMinutes == offset
+                                val labelText = when {
+                                    offset < 0 -> "${-offset}m ${viewModel.translate("Before")}"
+                                    offset > 0 -> "${offset}m ${viewModel.translate("After")}"
+                                    else -> viewModel.translate("No Offset")
+                                }
+                                
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(
+                                            if (selected) SleekPrimary else SleekBorder.copy(alpha = 0.5f)
                                         )
-                                    }
+                                        .clickable {
+                                            viewModel.editingAlarm.value = alarm.copy(offsetMinutes = offset)
+                                        }
+                                        .border(
+                                            BorderStroke(
+                                                width = 1.dp,
+                                                color = if (selected) SleekSecondary else Color.Transparent
+                                            ),
+                                            shape = RoundedCornerShape(12.dp)
+                                        )
+                                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                                ) {
+                                    Text(
+                                        text = labelText,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (selected) Color.White else SleekMutedText
+                                    )
                                 }
                             }
                         }
@@ -716,7 +725,7 @@ fun AddEditAlarmScreen(
     }
 }
 
-// Xiaomi / Premium MI Style Wheel Selector Component
+// Xiaomi / Premium MI Style Wheel Selector Component (Scrollable)
 @Composable
 fun MiStyleTimeWheelSelector(
     value: Int,
@@ -738,69 +747,64 @@ fun MiStyleTimeWheelSelector(
         
         Spacer(modifier = Modifier.height(8.dp))
         
-        val previousVal = (value - 1 + limit) % limit
-        val nextVal = (value + 1) % limit
+        // Pager for snapping and native-feeling scroll
+        val pagerState = androidx.compose.foundation.pager.rememberPagerState(
+            initialPage = value + (limit * 1000)
+        ) { limit * 2000 }
         
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+        LaunchedEffect(pagerState.isScrollInProgress) {
+            if (!pagerState.isScrollInProgress) {
+                val currentPageValue = pagerState.currentPage % limit
+                if (currentPageValue != value) {
+                    onValueChange(currentPageValue)
+                }
+            }
+        }
+        
+        LaunchedEffect(value) {
+            if (pagerState.currentPage % limit != value) {
+                // If it's changed from outside, snap it there
+                pagerState.scrollToPage(pagerState.currentPage - (pagerState.currentPage % limit) + value)
+            }
+        }
+        
+        Box(
             modifier = Modifier
                 .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(16.dp))
                 .background(SleekCardBg, shape = RoundedCornerShape(16.dp))
-                .padding(vertical = 12.dp, horizontal = 16.dp)
+                .height(130.dp)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
         ) {
-            // Level 1: Previous (Click to scroll up / decrement)
-            Text(
-                text = String.format("%02d", previousVal),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Medium,
-                color = SleekMutedText.copy(alpha = 0.4f),
-                modifier = Modifier
-                    .clickable { onValueChange(previousVal) }
-                    .padding(vertical = 4.dp)
-            )
-            
-            // Middle Separator Line
-            Box(
-                modifier = Modifier
-                    .width(40.dp)
-                    .height(1.dp)
-                    .background(SleekPrimary.copy(alpha = 0.2f))
-            )
-            
-            // Level 2: Selected (Large Bold)
-            Box(
-                modifier = Modifier
-                    .background(SleekPrimary.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = String.format("%02d", value),
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Black,
-                    color = SleekPrimary
-                )
+            androidx.compose.foundation.pager.VerticalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(vertical = 40.dp)
+            ) { page ->
+                val displayValue = page % limit
+                val isSelected = page == pagerState.currentPage
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = String.format("%02d", displayValue),
+                        fontSize = if (isSelected) 32.sp else 20.sp,
+                        fontWeight = if (isSelected) FontWeight.Black else FontWeight.Medium,
+                        color = if (isSelected) SleekPrimary else SleekMutedText.copy(alpha = 0.4f),
+                        maxLines = 1
+                    )
+                }
             }
-            
-            // Middle Separator Line
-            Box(
-                modifier = Modifier
-                    .width(40.dp)
-                    .height(1.dp)
-                    .background(SleekPrimary.copy(alpha = 0.2f))
-            )
-            
-            // Level 3: Next (Click to scroll down / increment)
-            Text(
-                text = String.format("%02d", nextVal),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Medium,
-                color = SleekMutedText.copy(alpha = 0.4f),
-                modifier = Modifier
-                    .clickable { onValueChange(nextVal) }
-                    .padding(vertical = 4.dp)
-            )
+            // selection overlay outlines
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(SleekPrimary.copy(alpha = 0.2f)))
+                Spacer(modifier = Modifier.height(48.dp))
+                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(SleekPrimary.copy(alpha = 0.2f)))
+            }
         }
     }
 }
