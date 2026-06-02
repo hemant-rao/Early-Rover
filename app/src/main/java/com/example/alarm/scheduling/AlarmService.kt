@@ -195,12 +195,17 @@ class AlarmService : Service() {
         val dismissIntent = Intent(this, AlarmService::class.java).apply {
             action = "ACTION_DISMISS"
             putExtra("ALARM_ID", alarmId)
+            putExtra("ALARM_TITLE", title)
+            putExtra("ALARM_TYPE", type)
         }
         val dismissPendingIntent = PendingIntent.getService(this, alarmId + 300, dismissIntent, pendingFlags)
 
         val snoozeIntent = Intent(this, AlarmService::class.java).apply {
             action = "ACTION_SNOOZE"
             putExtra("ALARM_ID", alarmId)
+            // Carry title/type so a notification-button snooze keeps the real name & SUNRISE/SUNSET type.
+            putExtra("ALARM_TITLE", title)
+            putExtra("ALARM_TYPE", type)
         }
         val snoozePendingIntent = PendingIntent.getService(this, alarmId + 400, snoozeIntent, pendingFlags)
 

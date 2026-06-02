@@ -280,6 +280,17 @@ fun TravelAlarmScreen(
                             onClick = {
                                 if (isTracking) {
                                     viewModel.stopTravelTracking()
+                                } else if (travelAlarms.isEmpty()) {
+                                    // Nothing to track yet — guide the user to add a waypoint first
+                                    // instead of starting an empty (and pointless) sentry.
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        t(
+                                            "Add a travel alarm first, then start the sentry.",
+                                            "पहले एक सफ़र अलार्म जोड़ें, फिर सुरक्षा चालू करें।"
+                                        ),
+                                        android.widget.Toast.LENGTH_LONG
+                                    ).show()
                                 } else {
                                     locationPermissionLauncher.launch(
                                         arrayOf(
@@ -329,10 +340,16 @@ fun TravelAlarmScreen(
 
                     IconButton(
                         onClick = {
+                            // Reset ALL dialog-scoped state so a new entry never inherits the
+                            // previous waypoint's category / alert toggles.
                             waypointLabel = ""
                             waypointLat = ""
                             waypointLng = ""
                             waypointRadius = 2.0f
+                            selectedCategory = "STATION"
+                            waypointTts = true
+                            waypointVibration = true
+                            waypointFlash = false
                             searchResults = emptyList()
                             searchQuery = ""
                             showAddDialog = true
@@ -834,12 +851,16 @@ fun TravelAlarmScreen(
                                     val lngDouble = waypointLng.toDoubleOrNull()
                                     val labelText = waypointLabel.trim()
 
-                                    if (labelText.isNotEmpty() && latDouble != null && lngDouble != null) {
+                                    val valid = labelText.isNotEmpty() &&
+                                        latDouble != null && lngDouble != null &&
+                                        latDouble in -90.0..90.0 && lngDouble in -180.0..180.0
+
+                                    if (valid) {
                                         val alarm = TravelAlarm(
                                             label = labelText,
                                             category = selectedCategory,
-                                            latitude = latDouble,
-                                            longitude = lngDouble,
+                                            latitude = latDouble!!,
+                                            longitude = lngDouble!!,
                                             radiusKm = waypointRadius.toDouble(),
                                             active = true,
                                             ttsEnabled = waypointTts,
@@ -848,6 +869,15 @@ fun TravelAlarmScreen(
                                         )
                                         viewModel.insertTravelAlarm(alarm)
                                         showAddDialog = false
+                                    } else {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            t(
+                                                "Enter a name and valid coordinates (lat -90..90, lng -180..180).",
+                                                "नाम और सही निर्देशांक भरें (अक्षांश -90..90, देशांतर -180..180)।"
+                                            ),
+                                            android.widget.Toast.LENGTH_LONG
+                                        ).show()
                                     }
                                 },
                                 modifier = Modifier.weight(1f).testTag("save_destination_btn"),

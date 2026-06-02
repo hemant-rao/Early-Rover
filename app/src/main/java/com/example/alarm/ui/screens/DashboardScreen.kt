@@ -12,6 +12,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.layout.layout
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -27,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -35,8 +39,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
@@ -46,6 +59,8 @@ import com.example.alarm.opengl.Celestial3DView
 import com.example.alarm.ui.weather.WeatherBackground
 import com.example.alarm.viewmodel.AlarmViewModel
 import com.example.ui.theme.*
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -57,7 +72,9 @@ fun DashboardScreen(
     onNavigateToAddAlarm: (type: String) -> Unit,
     onNavigateToEditAlarm: (id: Int) -> Unit,
     onNavigateToLocation: () -> Unit,
-    onNavigateToSettings: () -> Unit
+    onNavigateToSettings: () -> Unit,
+    requestedTab: Int? = null,
+    onTabConsumed: () -> Unit = {}
 ) {
     val alarms by viewModel.allAlarms.collectAsStateWithLifecycle()
     val nextAlarm by viewModel.nextUpcomingAlarm.collectAsStateWithLifecycle()
@@ -70,6 +87,8 @@ fun DashboardScreen(
     val lng by viewModel.longitude.collectAsStateWithLifecycle()
     val darkTheme by viewModel.darkThemeEnabled.collectAsStateWithLifecycle()
     val weather by viewModel.weather.collectAsStateWithLifecycle()
+    val savedCities by viewModel.savedCities.collectAsStateWithLifecycle()
+    val headerScope = rememberCoroutineScope()
 
     val formattedDate = remember {
         LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, MMM dd", Locale.getDefault()))
@@ -78,6 +97,21 @@ fun DashboardScreen(
     var showQuickAddMenu by remember { mutableStateOf(false) }
     var showLocationSearchDialog by remember { mutableStateOf(false) }
     var activeTab by remember { mutableIntStateOf(0) }
+
+    // Honor a tab requested from a tapped notification, then clear it so manual
+    // tab switches aren't overridden on later recompositions.
+    LaunchedEffect(requestedTab) {
+        if (requestedTab != null) {
+            activeTab = requestedTab
+            onTabConsumed()
+        }
+    }
+
+    // The quick-add menu belongs to the dashboard tab only; switching tabs (e.g. via the
+    // bottom nav) must dismiss it so it never lingers over another screen.
+    LaunchedEffect(activeTab) {
+        if (activeTab != 0) showQuickAddMenu = false
+    }
 
     val dashboardPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -334,48 +368,151 @@ fun DashboardScreen(
                                 
                                 Spacer(modifier = Modifier.height(4.dp))
                                 
-                                // Interactive location selection name trigger
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.clickable { showLocationSearchDialog = true }
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.LocationOn,
-                                        contentDescription = null,
-                                        tint = SleekSecondary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = locationName.ifEmpty { "Reykjavík, IS" },
-                                        style = MaterialTheme.typography.titleLarge.copy(
-                                            fontWeight = FontWeight.Bold,
-                                            color = SleekActiveText
+                                // Interactive location header: active name (swipeable) + saved-location
+                                // dots + an add (+) button. Swiping or tapping a dot switches location.
+                                if (savedCities.isEmpty()) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.LocationOn,
+                                            contentDescription = null,
+                                            tint = SleekSecondary,
+                                            modifier = Modifier.size(16.dp)
                                         )
-                                    )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = locationName.ifEmpty { "Reykjavík, IS" },
+                                            style = MaterialTheme.typography.titleLarge.copy(
+                                                fontWeight = FontWeight.Bold,
+                                                color = SleekActiveText
+                                            ),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable { showLocationSearchDialog = true }
+                                        )
+                                        IconButton(
+                                            onClick = { showLocationSearchDialog = true },
+                                            modifier = Modifier.size(28.dp).testTag("add_location_header_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.AddCircle,
+                                                contentDescription = "Add New Location",
+                                                tint = SleekPrimary,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    val activeCityIndex = remember(savedCities, locationName) {
+                                        savedCities.indexOfFirst { c ->
+                                            locationName.equals(c.name, true) ||
+                                                locationName.startsWith(c.name, true) ||
+                                                c.name.startsWith(locationName, true)
+                                        }.coerceAtLeast(0)
+                                    }
+                                    val pagerState = rememberPagerState(initialPage = activeCityIndex) { savedCities.size }
+
+                                    // External location change (e.g. via search dialog) -> move the pager.
+                                    LaunchedEffect(activeCityIndex, savedCities.size) {
+                                        if (activeCityIndex in savedCities.indices &&
+                                            pagerState.currentPage != activeCityIndex
+                                        ) {
+                                            pagerState.animateScrollToPage(activeCityIndex)
+                                        }
+                                    }
+                                    // User swipe/dot tap settles on a page -> make that location active.
+                                    // drop(1) skips the initial emission so we never override an
+                                    // unsaved/auto-detected active location on first composition.
+                                    LaunchedEffect(pagerState, savedCities) {
+                                        snapshotFlow { pagerState.currentPage }
+                                            .drop(1)
+                                            .collect { page ->
+                                                val c = savedCities.getOrNull(page) ?: return@collect
+                                                // Same symmetric match as activeCityIndex, so the two
+                                                // effects agree and never fight.
+                                                val matches = locationName.equals(c.name, true) ||
+                                                    locationName.startsWith(c.name, true) ||
+                                                    c.name.startsWith(locationName, true)
+                                                if (!matches) viewModel.setManualCitySelection(c)
+                                            }
+                                    }
+
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.LocationOn,
+                                            contentDescription = null,
+                                            tint = SleekSecondary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        HorizontalPager(
+                                            state = pagerState,
+                                            modifier = Modifier.weight(1f)
+                                        ) { page ->
+                                            Text(
+                                                text = savedCities[page].name,
+                                                style = MaterialTheme.typography.titleLarge.copy(
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = SleekActiveText
+                                                ),
+                                                maxLines = 1,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable { showLocationSearchDialog = true }
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        // Saved-location dots (one per city), tappable to switch.
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            savedCities.indices.forEach { i ->
+                                                val selected = i == pagerState.currentPage
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(if (selected) 8.dp else 6.dp)
+                                                        .background(
+                                                            if (selected) SleekPrimary
+                                                            else SleekMutedText.copy(alpha = 0.4f),
+                                                            CircleShape
+                                                        )
+                                                        .clickable {
+                                                            headerScope.launch { pagerState.animateScrollToPage(i) }
+                                                        }
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        IconButton(
+                                            onClick = { showLocationSearchDialog = true },
+                                            modifier = Modifier.size(28.dp).testTag("add_location_header_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.AddCircle,
+                                                contentDescription = "Add New Location",
+                                                tint = SleekPrimary,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
 
-                        // Added multiple-location carousel hub here!
-                        item {
-                            LocationCarouselSection(
-                                viewModel = viewModel,
-                                onAddLocationClick = { showLocationSearchDialog = true }
-                            )
-                        }
-
                         // 1. INTERACTIVE NATIVE 3D SOLAR SYSTEM (OpenGL ES) at the TOP!
+                        // Full-bleed (edge to edge) — no box/border so the planets float over the sky.
                         item {
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(340.dp)
-                                        .clip(RoundedCornerShape(24.dp))
-                                        .border(BorderStroke(1.dp, SleekBorder), RoundedCornerShape(24.dp))
-                                        .background(SleekCardBg.copy(alpha = 0.5f))
-                                        .padding(vertical = 4.dp),
+                                        .fullBleed(16.dp)
+                                        .height(380.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Box(
@@ -383,8 +520,8 @@ fun DashboardScreen(
                                             .fillMaxSize(0.95f)
                                             .background(
                                                 Brush.radialGradient(
-                                                    colors = listOf(SleekPrimary.copy(alpha = 0.16f), Color.Transparent),
-                                                    radius = 500f
+                                                    colors = listOf(SleekPrimary.copy(alpha = 0.12f), Color.Transparent),
+                                                    radius = 620f
                                                 )
                                             )
                                     )
@@ -408,7 +545,7 @@ fun DashboardScreen(
                                 ) {
                                     SunCaption(
                                         label = viewModel.translate("SUNRISE"),
-                                        value = String.format("%02d:%02d AM", if (sunrise.hour % 12 == 0) 12 else sunrise.hour % 12, sunrise.minute),
+                                        value = String.format("%02d:%02d %s", if (sunrise.hour % 12 == 0) 12 else sunrise.hour % 12, sunrise.minute, if (sunrise.hour >= 12) "PM" else "AM"),
                                         icon = Icons.Default.WbSunny,
                                         tint = SleekSolarAccent
                                     )
@@ -421,7 +558,7 @@ fun DashboardScreen(
                                     )
                                     SunCaption(
                                         label = viewModel.translate("SUNSET"),
-                                        value = String.format("%02d:%02d PM", if (sunset.hour % 12 == 0) 12 else sunset.hour % 12, sunset.minute),
+                                        value = String.format("%02d:%02d %s", if (sunset.hour % 12 == 0) 12 else sunset.hour % 12, sunset.minute, if (sunset.hour >= 12) "PM" else "AM"),
                                         icon = Icons.Default.WbTwilight,
                                         tint = SleekSecondary,
                                         alignEnd = true
@@ -732,67 +869,76 @@ fun DashboardScreen(
                 }
             }
 
-            // Quick Add Popup Menu matching modern sleek animations
-            AnimatedVisibility(
-                visible = showQuickAddMenu,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .offset(y = (-96).dp)
-                    .padding(horizontal = 24.dp)
-            ) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth(0.85f)
-                        .shadow(16.dp, RoundedCornerShape(20.dp)),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = SleekCardBg),
-                    border = BorderStroke(1.dp, SleekBorder)
+            // Quick Add menu — hosted in a Popup (a separate window) so it always renders
+            // ABOVE the OpenGL solar-system surface, which is drawn on top of the main
+            // window and would otherwise bleed through and cover the menu.
+            if (showQuickAddMenu) {
+                val density = LocalDensity.current
+                Popup(
+                    alignment = Alignment.BottomCenter,
+                    offset = with(density) { IntOffset(0, -(96.dp).roundToPx()) },
+                    onDismissRequest = { showQuickAddMenu = false },
+                    properties = PopupProperties(focusable = true)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    AnimatedVisibility(
+                        visible = showQuickAddMenu,
+                        enter = fadeIn(),
+                        exit = fadeOut()
                     ) {
-                        Text(
-                            text = "SCHEDULE NEW ALARM",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.Black,
-                                color = SleekPrimary,
-                                letterSpacing = 1.2.sp
-                            ),
-                            modifier = Modifier.padding(bottom = 6.dp)
-                        )
-                        
-                        SleekQuickAddItem(
-                            text = "Solar Sunrise Awake",
-                            icon = Icons.Default.WbSunny,
-                            tint = SleekSolarAccent,
-                            onClick = {
-                                showQuickAddMenu = false
-                                onNavigateToAddAlarm("SUNRISE")
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth(0.85f)
+                                .padding(horizontal = 24.dp)
+                                .shadow(16.dp, RoundedCornerShape(20.dp)),
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = SleekCardBg),
+                            border = BorderStroke(1.dp, SleekBorder)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "SCHEDULE NEW ALARM",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        color = SleekPrimary,
+                                        letterSpacing = 1.2.sp
+                                    ),
+                                    modifier = Modifier.padding(bottom = 6.dp)
+                                )
+
+                                SleekQuickAddItem(
+                                    text = "Solar Sunrise Awake",
+                                    icon = Icons.Default.WbSunny,
+                                    tint = SleekSolarAccent,
+                                    onClick = {
+                                        showQuickAddMenu = false
+                                        onNavigateToAddAlarm("SUNRISE")
+                                    }
+                                )
+                                Divider(color = SleekBorder.copy(alpha = 0.5f))
+                                SleekQuickAddItem(
+                                    text = "Solar Sunset Reflection",
+                                    icon = Icons.Default.WbTwilight,
+                                    tint = SleekSecondary,
+                                    onClick = {
+                                        showQuickAddMenu = false
+                                        onNavigateToAddAlarm("SUNSET")
+                                    }
+                                )
+                                Divider(color = SleekBorder.copy(alpha = 0.5f))
+                                SleekQuickAddItem(
+                                    text = "Standard Manual Clock",
+                                    icon = Icons.Default.AccessTime,
+                                    tint = Color.LightGray,
+                                    onClick = {
+                                        showQuickAddMenu = false
+                                        onNavigateToAddAlarm("CUSTOM")
+                                    }
+                                )
                             }
-                        )
-                        Divider(color = SleekBorder.copy(alpha = 0.5f))
-                        SleekQuickAddItem(
-                            text = "Solar Sunset Reflection",
-                            icon = Icons.Default.WbTwilight,
-                            tint = SleekSecondary,
-                            onClick = {
-                                showQuickAddMenu = false
-                                onNavigateToAddAlarm("SUNSET")
-                            }
-                        )
-                        Divider(color = SleekBorder.copy(alpha = 0.5f))
-                        SleekQuickAddItem(
-                            text = "Standard Manual Clock",
-                            icon = Icons.Default.AccessTime,
-                            tint = Color.LightGray,
-                            onClick = {
-                                showQuickAddMenu = false
-                                onNavigateToAddAlarm("CUSTOM")
-                            }
-                        )
+                        }
                     }
                 }
             }
@@ -922,6 +1068,26 @@ fun SleekAlarmItemRow(
                         modifier = Modifier.padding(top = 2.dp)
                     )
                 }
+
+                // Surface the per-alarm snooze so users see it's configurable.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 2.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Snooze,
+                        contentDescription = null,
+                        tint = if (alarm.active) SleekMutedText else SleekMutedText.copy(alpha = 0.5f),
+                        modifier = Modifier.size(12.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (alarm.snoozeEnabled) "Snooze ${alarm.snoozeMinutes}m" else "Snooze off",
+                        fontSize = 10.sp,
+                        color = if (alarm.active) SleekMutedText else SleekMutedText.copy(alpha = 0.5f),
+                        fontWeight = FontWeight.Medium
+                    )
+                }
             }
 
             // Interactive controls
@@ -1003,13 +1169,29 @@ fun SleekQuickAddItem(text: String, icon: androidx.compose.ui.graphics.vector.Im
     }
 }
 
+/**
+ * Lets a child ignore the parent's horizontal [padding] on each side, so it spans the full
+ * available width (edge to edge) even inside a LazyColumn that has horizontal contentPadding.
+ */
+private fun Modifier.fullBleed(padding: Dp): Modifier = this.layout { measurable, constraints ->
+    val extra = (padding * 2).roundToPx()
+    val widened = constraints.copy(
+        minWidth = constraints.maxWidth + extra,
+        maxWidth = constraints.maxWidth + extra
+    )
+    val placeable = measurable.measure(widened)
+    layout(placeable.width, placeable.height) {
+        placeable.place(-padding.roundToPx(), 0)
+    }
+}
+
 private fun getDailyRepeaterString(days: List<Int>): String {
     if (days.size == 7) return "Every day"
     if (days.size == 5 && !days.contains(6) && !days.contains(7)) return "Weekdays"
     if (days.size == 2 && days.contains(6) && days.contains(7)) return "Weekends"
     
     val dayChars = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-    return days.sorted().map { dayChars[it - 1] }.joinToString(", ")
+    return days.sorted().mapNotNull { dayChars.getOrNull(it - 1) }.joinToString(", ")
 }
 
 @Composable
@@ -1021,6 +1203,23 @@ fun LocationSearchDialog(
     var searchQuery by remember { mutableStateOf("") }
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
     val isSearching = searchQuery.isNotEmpty()
+
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val resultsListState = rememberLazyListState()
+
+    // Size the results dropdown to the device: ~42% of the screen height, so it grows on
+    // tall phones and stays compact on short ones, and scrolls once it hits that cap.
+    val configuration = LocalConfiguration.current
+    val maxResultsHeight = (configuration.screenHeightDp * 0.42f).dp
+
+    // Once the user starts scrolling the results, drop the keyboard so the full list is visible.
+    LaunchedEffect(resultsListState.isScrollInProgress) {
+        if (resultsListState.isScrollInProgress) {
+            keyboardController?.hide()
+            focusManager.clearFocus()
+        }
+    }
 
     // Modern focus requester to open keyboard automatically
     val focusRequester = remember { FocusRequester() }
@@ -1119,7 +1318,12 @@ fun LocationSearchDialog(
                         },
                         modifier = Modifier
                             .weight(1f)
-                            .focusRequester(focusRequester),
+                            .focusRequester(focusRequester)
+                            .onFocusChanged { state ->
+                                // When focus leaves the field, collapse the keyboard so the
+                                // results list has room and can be scrolled freely.
+                                if (!state.isFocused) keyboardController?.hide()
+                            },
                         textStyle = TextStyle(color = SleekActiveText, fontSize = 13.sp),
                         singleLine = true,
                         cursorBrush = SolidColor(SleekPrimary),
@@ -1179,8 +1383,9 @@ fun LocationSearchDialog(
 
                 // Live Search list or helper label
                 if (isSearching) {
-                    Box(modifier = Modifier.heightIn(max = 220.dp)) {
+                    Box(modifier = Modifier.heightIn(max = maxResultsHeight)) {
                         LazyColumn(
+                            state = resultsListState,
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(searchResults) { city ->
@@ -1801,7 +2006,9 @@ fun LocationCarouselSection(
             modifier = Modifier.fillMaxWidth()
         ) {
             items(savedCities) { city ->
-                val isActive = city.name.lowercase() == currentLocationName.lowercase()
+                val isActive = currentLocationName.equals(city.name, true) ||
+                    currentLocationName.startsWith(city.name, true) ||
+                    city.name.startsWith(currentLocationName, true)
                 
                 val simulatedTemp = when (city.name.lowercase()) {
                     "new york" -> "19°"

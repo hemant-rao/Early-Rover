@@ -21,7 +21,9 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.speech.tts.TextToSpeech
 import android.util.Log
+import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.example.MainActivity
 import com.example.alarm.data.AppDatabase
 import com.example.alarm.data.TravelAlarm
@@ -43,6 +45,11 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
     private var isTtsReady = false
     private var mediaPlayer: MediaPlayer? = null
     private var vibrator: Vibrator? = null
+    private var arrivalWakeLock: android.os.PowerManager.WakeLock? = null
+
+    // Ids of alarms that have already fired this session, so a single arrival doesn't
+    // re-trigger on every 3-6s location update while still inside the radius.
+    private val triggeredAlarmIds = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
 
     companion object {
         private const val TAG = "TravelTrackingService"
@@ -92,15 +99,38 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         _isTracking.value = true
         _statusMessage.value = "Locating GPS Satellite..."
 
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
-        textToSpeech = TextToSpeech(this, this)
-        initVibrator()
-        createNotificationChannel()
+        // Everything in onCreate is guarded: a foreground-service or permission failure
+        // here would otherwise crash the whole app the instant the user taps "Start".
+        try {
+            fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+            textToSpeech = TextToSpeech(this, this)
+            initVibrator()
+            createNotificationChannel()
 
-        // Build elegant foreground persistent safety notification
-        startForeground(NOTIFICATION_ID, buildStaticNotification("Securing transit path...", "Searching location signals"))
+            // On Android 10+ the location foreground-service type must be supplied to
+            // startForeground (it is declared in the manifest too). ServiceCompat picks
+            // the right overload for the running OS version.
+            val serviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+            } else {
+                0
+            }
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildStaticNotification("Securing transit path...", "Searching location signals"),
+                serviceType
+            )
 
-        startLocationTracking()
+            startLocationTracking()
+        } catch (e: Exception) {
+            // Could not promote to a foreground location service (missing permission,
+            // OS restriction, etc.). Fail gracefully instead of crashing the app.
+            Log.e(TAG, "Failed to start travel tracking service", e)
+            _statusMessage.value = "Unable to start tracking. Check location permission."
+            _isTracking.value = false
+            stopSelf()
+        }
     }
 
     private fun initVibrator() {
@@ -193,8 +223,9 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
                     closestAlarm = alarm
                 }
 
-                // Proximity threshold penetrated!
-                if (distance <= alarm.radiusKm) {
+                // Proximity threshold penetrated! Set.add(id) returns false if already fired,
+                // so each arrival triggers exactly once instead of on every location update.
+                if (distance <= alarm.radiusKm && triggeredAlarmIds.add(alarm.id)) {
                     triggerArrivalAlarm(alarm, distance)
                 }
             }
@@ -225,12 +256,17 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
             
             // Build an immediate WakeLock to illuminate screen and sound alerts even in deep suspend
             val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-            val wakeLock = powerManager.newWakeLock(
-                android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP,
-                "SolarisTravelAlarm::WakeLockTag"
-            )
             try {
-                wakeLock.acquire(15000L) // hold wakelock for 15 seconds to ensure ring
+                // Release any previous lock and keep a single, non-reference-counted lock we can
+                // reliably release in onDestroy (auto-times out after 15s as a safety net).
+                arrivalWakeLock?.let { if (it.isHeld) it.release() }
+                arrivalWakeLock = powerManager.newWakeLock(
+                    android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                    "SolarisTravelAlarm::WakeLockTag"
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire(15000L) // hold wakelock for 15 seconds to ensure ring
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to acquire wake lock: ", e)
             }
@@ -375,9 +411,12 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         val cameraManager = getSystemService(Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager ?: return
         serviceScope.launch(Dispatchers.IO) {
             try {
-                val cameraIdList = cameraManager.cameraIdList
-                if (cameraIdList.isNotEmpty()) {
-                    val cameraId = cameraIdList[0] // usually camera index 0 is first back camera with flash
+                // Pick a camera that actually has a flash unit (index 0 may be the front camera).
+                val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
+                    cameraManager.getCameraCharacteristics(id)
+                        .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                }
+                if (cameraId != null) {
                     for (i in 1..25) {
                         try {
                             cameraManager.setTorchMode(cameraId, i % 2 == 1)
@@ -411,10 +450,15 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun buildStaticNotification(title: String, content: String): Notification {
+        val contentIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            // Tapping the tracking notification should land on the Travel page.
+            putExtra("NAV_DESTINATION", "travel")
+        }
         val pendingIntent = PendingIntent.getActivity(
             this,
-            0,
-            Intent(this, MainActivity::class.java),
+            1001,
+            contentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -468,7 +512,14 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         mediaPlayer?.stop()
         mediaPlayer?.release()
         mediaPlayer = null
-        
+
+        try {
+            arrivalWakeLock?.let { if (it.isHeld) it.release() }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed releasing wake lock", e)
+        }
+        arrivalWakeLock = null
+
         vibrator?.cancel()
 
         textToSpeech?.stop()

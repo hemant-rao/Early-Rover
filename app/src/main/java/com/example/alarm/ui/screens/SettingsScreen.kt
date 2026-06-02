@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -126,6 +127,19 @@ fun SettingsScreen(
                 letterSpacing = 1.2.sp
             )
 
+            // Dropdown populated from the device's configured languages (en + hi always present).
+            val context = LocalContext.current
+            val activity = context as? android.app.Activity
+            val langOptions = remember { viewModel.availableLanguages() }
+            var langMenuOpen by remember { mutableStateOf(false) }
+            val currentLangLabel = remember(langOptions, currentLang) {
+                langOptions.firstOrNull { it.tag == currentLang }?.displayName
+                    ?: langOptions.firstOrNull {
+                        it.tag.substringBefore('-').equals(currentLang.substringBefore('-'), true)
+                    }?.displayName
+                    ?: currentLang
+            }
+
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -133,40 +147,53 @@ fun SettingsScreen(
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = SleekCardBg)
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    listOf("en" to "English (US)", "hi" to "हिन्दी (Hindi)").forEach { (code, name) ->
-                        val isSelected = currentLang == code
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(if (isSelected) SleekPrimary else SleekBorder.copy(alpha = 0.5f))
-                                .clickable { viewModel.setAppLanguage(code) }
-                                .border(
-                                    BorderStroke(
-                                        width = 1.dp,
-                                        color = if (isSelected) SleekSecondary else Color.Transparent
-                                    ),
-                                    shape = RoundedCornerShape(16.dp)
-                                )
-                                .padding(vertical = 14.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = name,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isSelected) Color.White else SleekMutedText,
-                                fontSize = 14.sp
+                Box {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(24.dp))
+                            .clickable { langMenuOpen = true }
+                            .padding(20.dp)
+                            .testTag("language_dropdown"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = currentLangLabel,
+                            fontWeight = FontWeight.Bold,
+                            color = SleekActiveText,
+                            fontSize = 15.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            imageVector = Icons.Default.ArrowDropDown,
+                            contentDescription = null,
+                            tint = SleekSecondary
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = langMenuOpen,
+                        onDismissRequest = { langMenuOpen = false }
+                    ) {
+                        langOptions.forEach { opt ->
+                            DropdownMenuItem(
+                                text = { Text(opt.displayName) },
+                                onClick = {
+                                    langMenuOpen = false
+                                    viewModel.setAppLanguage(opt.tag, activity)
+                                },
+                                modifier = Modifier.testTag("lang_item_${opt.tag}")
                             )
                         }
                     }
                 }
             }
+
+            Text(
+                text = viewModel.translate("Only English & Hindi are fully translated; other languages change date/number format only."),
+                fontSize = 11.sp,
+                color = SleekMutedText,
+                modifier = Modifier.padding(horizontal = 4.dp)
+            )
 
             // 2. DEFAULT SNOOZE LIMIT TIMERS
             Text(

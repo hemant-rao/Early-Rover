@@ -19,7 +19,6 @@ import androidx.compose.ui.graphics.Color
 import com.example.alarm.weather.WeatherCondition
 import com.example.alarm.weather.WeatherInfo
 import kotlin.math.PI
-import kotlin.math.cos
 import kotlin.math.sin
 
 /**
@@ -46,7 +45,8 @@ fun WeatherBackground(
     )
     val slow by transition.animateFloat(
         initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(14000, easing = LinearEasing), RepeatMode.Restart),
+        // Long, constant-speed cycle so clouds glide gently across the sky instead of racing.
+        animationSpec = infiniteRepeatable(tween(60000, easing = LinearEasing), RepeatMode.Restart),
         label = "slow"
     )
     val pulse by transition.animateFloat(
@@ -105,25 +105,40 @@ fun WeatherBackground(
 // ----------------------------------------------------------------- drawing pieces
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSun(pulse: Float) {
-    val center = Offset(size.width * 0.78f, size.height * 0.16f)
-    val rays = 12
-    val rot = pulse * 2f * PI.toFloat()
-    val rayLen = size.minDimension * 0.10f
-    val baseR = size.minDimension * 0.07f
-    for (i in 0 until rays) {
-        val a = rot + i * (2f * PI.toFloat() / rays)
-        val start = Offset(center.x + cos(a) * baseR * 1.3f, center.y + sin(a) * baseR * 1.3f)
-        val end = Offset(center.x + cos(a) * (baseR * 1.3f + rayLen), center.y + sin(a) * (baseR * 1.3f + rayLen))
-        drawLine(Color(0xFFFFE08A).copy(alpha = 0.45f), start, end, strokeWidth = 6f)
-    }
+    // Small, realistic sun: soft radial halo + bright core, no spoke lines. A very gentle
+    // radius "breathing" (slow sine) keeps it alive without any fast rotation.
+    val center = Offset(size.width * 0.80f, size.height * 0.15f)
+    val r = size.minDimension * 0.045f
+    val breathe = 1f + 0.04f * sin((pulse * 2f * PI.toFloat()).toDouble()).toFloat()
+
+    // Wide, soft outer atmosphere glow
     drawCircle(
         brush = Brush.radialGradient(
-            listOf(Color(0xFFFFF3C4), Color(0xFFFFC861).copy(alpha = 0.0f)),
-            center = center, radius = baseR * 2.6f
+            listOf(
+                Color(0xFFFFE9A8).copy(alpha = 0.42f),
+                Color(0xFFFFD27A).copy(alpha = 0.16f),
+                Color(0x00FFD27A)
+            ),
+            center = center, radius = r * 7f * breathe
         ),
-        radius = baseR * 2.6f, center = center
+        radius = r * 7f * breathe, center = center
     )
-    drawCircle(Color(0xFFFFE49B), radius = baseR, center = center)
+    // Inner warm glow
+    drawCircle(
+        brush = Brush.radialGradient(
+            listOf(Color(0xFFFFF6D8), Color(0x00FFE49B)),
+            center = center, radius = r * 2.6f
+        ),
+        radius = r * 2.6f, center = center
+    )
+    // Bright luminous core
+    drawCircle(
+        brush = Brush.radialGradient(
+            listOf(Color(0xFFFFFDF5), Color(0xFFFFE39A)),
+            center = center, radius = r
+        ),
+        radius = r, center = center
+    )
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawMoon() {
@@ -155,11 +170,25 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawClouds(
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawCloud(c: Offset, s: Float, color: Color) {
-    drawCircle(color, radius = s * 0.5f, center = c)
-    drawCircle(color, radius = s * 0.38f, center = Offset(c.x - s * 0.55f, c.y + s * 0.12f))
-    drawCircle(color, radius = s * 0.42f, center = Offset(c.x + s * 0.55f, c.y + s * 0.1f))
-    drawCircle(color, radius = s * 0.34f, center = Offset(c.x + s * 0.12f, c.y - s * 0.28f))
-    drawRect(color, topLeft = Offset(c.x - s * 0.9f, c.y), size = Size(s * 1.8f, s * 0.5f))
+    // Fluffy, rounded cloud built from overlapping soft puffs (no hard rectangle base).
+    // dx, dy are offsets in units of s; rad is the puff radius in units of s.
+    val puffs = arrayOf(
+        floatArrayOf(0.00f, 0.06f, 0.50f),
+        floatArrayOf(-0.55f, 0.16f, 0.36f),
+        floatArrayOf(0.55f, 0.14f, 0.40f),
+        floatArrayOf(-0.85f, 0.24f, 0.26f),
+        floatArrayOf(0.88f, 0.22f, 0.28f),
+        floatArrayOf(-0.28f, -0.10f, 0.40f),
+        floatArrayOf(0.26f, -0.14f, 0.42f),
+        floatArrayOf(0.02f, -0.26f, 0.34f)
+    )
+    for (p in puffs) {
+        drawCircle(color, radius = s * p[2], center = Offset(c.x + p[0] * s, c.y + p[1] * s))
+    }
+    // Soft brighter highlight along the top for a sunlit, voluminous feel.
+    val hi = color.copy(alpha = (color.alpha * 0.5f).coerceIn(0f, 1f))
+    drawCircle(hi, radius = s * 0.30f, center = Offset(c.x - 0.20f * s, c.y - 0.18f * s))
+    drawCircle(hi, radius = s * 0.26f, center = Offset(c.x + 0.30f * s, c.y - 0.20f * s))
 }
 
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRain(drops: List<Particle>, fast: Float) {

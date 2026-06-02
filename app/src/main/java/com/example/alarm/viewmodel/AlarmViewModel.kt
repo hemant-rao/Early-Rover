@@ -110,15 +110,35 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     private val _defaultSnoozeMinutes = MutableStateFlow(settingsPrefs.getInt("default_snooze", 5))
     val defaultSnoozeMinutes: StateFlow<Int> = _defaultSnoozeMinutes.asStateFlow()
 
-    val currentLanguage = MutableStateFlow(settingsPrefs.getString("app_language", "en") ?: "en")
+    // BCP-47 language tag (e.g. "en", "hi", "hi-IN"). LocaleHelper is the canonical store.
+    val currentLanguage = MutableStateFlow(
+        com.example.alarm.util.LocaleHelper.getPersistedTag(application)
+    )
 
-    fun setAppLanguage(lang: String) {
-        currentLanguage.value = lang
-        settingsPrefs.edit().putString("app_language", lang).apply()
+    /**
+     * Sets the UI language. Persists via [LocaleHelper], then recreates the activity so
+     * attachBaseContext re-reads the locale (LocalConfiguration updates). The ViewModel
+     * survives recreate(); the key(lang) wrapper in MainActivity is a safety net for
+     * the non-reactive translate() call sites.
+     */
+    fun setAppLanguage(tag: String, activity: android.app.Activity? = null) {
+        if (tag == currentLanguage.value) return
+        currentLanguage.value = tag
+        com.example.alarm.util.LocaleHelper.persist(getApplication(), tag)
+        // On API 33+ persist() sets the framework LocaleManager, which itself recreates the
+        // activity; calling recreate() again would rebuild twice. Only recreate manually below 33.
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.TIRAMISU) {
+            activity?.recreate()
+        }
     }
 
+    /** Device languages for the Settings dropdown (en + hi always included). */
+    fun availableLanguages(): List<com.example.alarm.util.LocaleHelper.LangOption> =
+        com.example.alarm.util.LocaleHelper.availableLanguages(getApplication())
+
     fun translate(englishText: String): String {
-        if (currentLanguage.value == "hi") {
+        // startsWith so tags like "hi-IN" still resolve to the Hindi dictionary.
+        if (currentLanguage.value.startsWith("hi")) {
             return translationsHindi[englishText] ?: englishText
         }
         return englishText
@@ -159,9 +179,11 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "Dark Mode" to "डार्क मोड",
         "Default Snooze Duration" to "डिफ़ॉल्ट स्नूज़ समय",
         "Select Language" to "भाषा चुनें (Language)",
+        "Only English & Hindi are fully translated; other languages change date/number format only." to "केवल अंग्रेज़ी और हिंदी का पूरा अनुवाद उपलब्ध है; अन्य भाषाएँ केवल तारीख/संख्या प्रारूप बदलती हैं।",
         "Where are you? Type city name here..." to "आप कहाँ हैं? शहर ढूंढें...",
         "Search city (e.g. Reykjavik, London, Tokyo...)" to "शहर का नाम (जैसे: दिल्ली, मुम्बई, टोक्यो...)",
         "Use My Current Phone Location (GPS)" to "अपने फ़ोन के GPS/स्थान का उपयोग करें",
+        "Location permission denied. Enable it in Settings or search a city below." to "स्थान की अनुमति अस्वीकृत। इसे सेटिंग्स में चालू करें या नीचे शहर खोजें।",
         "Instantly adjust to where you are standing." to "सटीक रूप से अपने वर्तमान स्थान का उपयोग करें।",
         "Why set location?" to "स्थान चुनना क्यों ज़रूरी है?",
         "We calculate the exact sunrise and sunset times automatically for your location, even without internet!" to "हम बिना इंटरनेट के भी आपके स्थान के लिए सूर्योदय और सूर्यास्त का बिल्कुल सटीक समय ऑन-डिवाइस निकालते हैं!",
@@ -428,9 +450,8 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         _longitude.value = city.longitude
         _timezoneOffset.value = city.timezoneOffset
         _locationName.value = city.name
-        
-        recomputeSunTimes()
-        refreshWeather()
+
+        recomputeSunTimes() // recomputeSunTimes() already refreshes weather for the new coordinates
     }
 
     fun searchLocationQuery(query: String) {
@@ -450,8 +471,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 _longitude.value = lng
                 _timezoneOffset.value = offset
                 _locationName.value = name
-                recomputeSunTimes()
-                refreshWeather()
+                recomputeSunTimes() // recomputeSunTimes() already refreshes weather for the new coordinates
             },
             onFailure = { e ->
                 Log.e("AlarmViewModel", "Failed to detect automatic GPS location", e)

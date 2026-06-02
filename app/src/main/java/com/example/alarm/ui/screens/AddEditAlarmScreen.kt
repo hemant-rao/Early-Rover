@@ -38,19 +38,26 @@ fun AddEditAlarmScreen(
 ) {
     val editingState by viewModel.editingAlarm.collectAsState()
     val allAlarms by viewModel.allAlarms.collectAsState()
+    val sunriseTime by viewModel.sunriseTime.collectAsState()
+    val sunsetTime by viewModel.sunsetTime.collectAsState()
 
-    // Initialize scratchpad from Database if editing
-    LaunchedEffect(alarmId) {
+    // Initialize scratchpad from Database if editing. Keyed on allAlarms too so that on a
+    // cold start (where the Room-backed list is still empty) it re-resolves once data loads
+    // instead of wrongly falling through to a blank CUSTOM scratchpad.
+    LaunchedEffect(alarmId, allAlarms) {
         if (alarmId != null) {
             val existing = allAlarms.find { it.id == alarmId }
-            if (existing != null) {
-                viewModel.editingAlarm.value = existing
-            } else {
-                viewModel.startNewAlarmScratchpad("CUSTOM")
+            when {
+                existing != null -> viewModel.editingAlarm.value = existing
+                // List has loaded but this id is genuinely gone (e.g. deleted elsewhere):
+                // clear any stale scratchpad left over from a prior screen and leave.
+                allAlarms.isNotEmpty() -> {
+                    viewModel.editingAlarm.value = null
+                    onNavigateBack()
+                }
+                // else: list not loaded yet — wait for the next emission.
             }
-        }
-        // If scratchpad is empty for some reason, guarantee initialization
-        if (viewModel.editingAlarm.value == null) {
+        } else if (viewModel.editingAlarm.value == null) {
             viewModel.startNewAlarmScratchpad("CUSTOM")
         }
     }
@@ -327,10 +334,17 @@ fun AddEditAlarmScreen(
                         
                         Spacer(modifier = Modifier.height(16.dp))
                         
-                        // Text summary representation
-                        val hour12 = if (alarm.hour % 12 == 0) 12 else alarm.hour % 12
-                        val ampm = if (alarm.hour >= 12) viewModel.translate("PM") else viewModel.translate("AM")
-                        val timeStr = String.format("%02d:%02d %s", hour12, alarm.minute, ampm)
+                        // Text summary representation — preview the ACTUAL fire time, i.e. the
+                        // sun event + chosen offset (this mirrors how saveEditingAlarm computes it),
+                        // so picking an offset chip updates the shown time.
+                        val previewBase = when (alarm.alarmType) {
+                            "SUNRISE" -> sunriseTime.plusMinutes(alarm.offsetMinutes.toLong())
+                            "SUNSET" -> sunsetTime.plusMinutes(alarm.offsetMinutes.toLong())
+                            else -> java.time.LocalTime.of(alarm.hour.coerceIn(0, 23), alarm.minute.coerceIn(0, 59))
+                        }
+                        val hour12 = if (previewBase.hour % 12 == 0) 12 else previewBase.hour % 12
+                        val ampm = if (previewBase.hour >= 12) viewModel.translate("PM") else viewModel.translate("AM")
+                        val timeStr = String.format("%02d:%02d %s", hour12, previewBase.minute, ampm)
                         Text(
                             text = "${viewModel.translate("Based on location, triggers today at")} $timeStr",
                             fontSize = 12.sp,
@@ -507,13 +521,47 @@ fun AddEditAlarmScreen(
                     }
 
                     if (alarm.snoozeEnabled) {
+                        // Quick presets so users can set a per-alarm snooze with one tap.
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            listOf(5, 10, 15, 20).forEach { preset ->
+                                val selected = alarm.snoozeMinutes == preset
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(if (selected) SleekPrimary else SleekBackground)
+                                        .border(
+                                            BorderStroke(0.5.dp, if (selected) SleekPrimary else SleekBorder),
+                                            RoundedCornerShape(10.dp)
+                                        )
+                                        .clickable {
+                                            viewModel.editingAlarm.value = alarm.copy(snoozeMinutes = preset)
+                                        }
+                                        .padding(vertical = 8.dp)
+                                        .testTag("snooze_preset_$preset"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "$preset",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (selected) Color.White else SleekMutedText
+                                    )
+                                }
+                            }
+                        }
+
                         Slider(
                             value = alarm.snoozeMinutes.toFloat(),
                             onValueChange = { value ->
                                 viewModel.editingAlarm.value = alarm.copy(snoozeMinutes = value.toInt())
                             },
                             valueRange = 1f..30f,
-                            steps = 30,
+                            // 28 steps => 30 discrete stops over 1..30, so every integer minute is selectable.
+                            steps = 28,
                             modifier = Modifier.testTag("snooze_slider"),
                             colors = SliderDefaults.colors(
                                 thumbColor = Color.White,

@@ -14,15 +14,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -38,15 +41,18 @@ fun LocationSettingsScreen(
     viewModel: AlarmViewModel,
     onNavigateBack: () -> Unit
 ) {
-    var searchQuery by remember { mutableStateOf("") }
+    val context = LocalContext.current
+    // rememberSaveable so the typed query / expanded panel survive rotation & config changes
+    // (the VM keeps searchResults, so plain remember would desync them).
+    var searchQuery by rememberSaveable { mutableStateOf("") }
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
-    
+
     val lat by viewModel.latitude.collectAsStateWithLifecycle()
     val lng by viewModel.longitude.collectAsStateWithLifecycle()
     val locName by viewModel.locationName.collectAsStateWithLifecycle()
     val tzOffset by viewModel.timezoneOffset.collectAsStateWithLifecycle()
 
-    var showAdvancedDetails by remember { mutableStateOf(false) }
+    var showAdvancedDetails by rememberSaveable { mutableStateOf(false) }
 
     // Location Permission Launcher
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -56,6 +62,13 @@ fun LocationSettingsScreen(
         val coarseLocation = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
         if (fineLocation || coarseLocation) {
             viewModel.triggerAutoLocationDetect()
+        } else {
+            // Denied: tell the user instead of leaving the button looking dead.
+            android.widget.Toast.makeText(
+                context,
+                viewModel.translate("Location permission denied. Enable it in Settings or search a city below."),
+                android.widget.Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -69,7 +82,7 @@ fun LocationSettingsScreen(
                 title = { Text(viewModel.translate("Location Coordinates"), fontWeight = FontWeight.Bold, color = SleekActiveText) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack, modifier = Modifier.testTag("loc_back_button")) {
-                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = viewModel.translate("Go back"), tint = SleekActiveText)
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = viewModel.translate("Go back"), tint = SleekActiveText)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

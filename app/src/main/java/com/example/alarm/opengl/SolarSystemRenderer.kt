@@ -154,11 +154,15 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
             }
             GLES20.glDepthMask(true)
 
-            // --- sun corona glow (additive billboard) ---
+            // --- sun corona glow (layered additive billboards) ---
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
             GLES20.glDepthMask(false)
-            val pulse = 1f + 0.06f * sin(t * 1.4f)
-            drawGlow(0f, 0f, 0f, SUN_RADIUS * 4.2f * pulse, rightX, rightY, rightZ, upX, upY, upZ)
+            // Wide, slow-breathing outer halo + a tighter brighter inner flare give the Sun
+            // a living, radiant atmosphere instead of a flat disc.
+            val pulseOuter = 1f + 0.10f * sin(t * 0.9f + 1.3f)
+            val pulseInner = 1f + 0.06f * sin(t * 1.7f)
+            drawGlow(0f, 0f, 0f, SUN_RADIUS * 6.4f * pulseOuter, rightX, rightY, rightZ, upX, upY, upZ)
+            drawGlow(0f, 0f, 0f, SUN_RADIUS * 3.4f * pulseInner, rightX, rightY, rightZ, upX, upY, upZ)
             GLES20.glDepthMask(true)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
 
@@ -511,14 +515,56 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
         private const val FS_PLANET = """
             precision mediump float;
             uniform vec3 uColor;
+            uniform float uTime;
             varying vec3 vWorld;
             varying vec3 vNormal;
+
+            // cheap hash + 3D value noise for procedural surface detail (no textures/assets)
+            float hash(vec3 p) {
+                return fract(sin(dot(p, vec3(17.1, 113.5, 71.7))) * 43758.5453);
+            }
+            float vnoise(vec3 p) {
+                vec3 i = floor(p);
+                vec3 f = fract(p);
+                f = f * f * (3.0 - 2.0 * f);
+                float n000 = hash(i + vec3(0.0, 0.0, 0.0));
+                float n100 = hash(i + vec3(1.0, 0.0, 0.0));
+                float n010 = hash(i + vec3(0.0, 1.0, 0.0));
+                float n110 = hash(i + vec3(1.0, 1.0, 0.0));
+                float n001 = hash(i + vec3(0.0, 0.0, 1.0));
+                float n101 = hash(i + vec3(1.0, 0.0, 1.0));
+                float n011 = hash(i + vec3(0.0, 1.0, 1.0));
+                float n111 = hash(i + vec3(1.0, 1.0, 1.0));
+                float nx00 = mix(n000, n100, f.x);
+                float nx10 = mix(n010, n110, f.x);
+                float nx01 = mix(n001, n101, f.x);
+                float nx11 = mix(n011, n111, f.x);
+                return mix(mix(nx00, nx10, f.y), mix(nx01, nx11, f.y), f.z);
+            }
+
             void main() {
+                vec3 N = normalize(vNormal);
                 vec3 L = normalize(-vWorld);            // Sun is at the origin
-                float diff = max(dot(vNormal, L), 0.0);
-                float ambient = 0.14;
-                float rim = pow(1.0 - max(dot(vNormal, L), 0.0), 3.0) * 0.10;
-                vec3 col = uColor * (ambient + diff * 0.95) + vec3(rim);
+                float diff = max(dot(N, L), 0.0);
+                float ambient = 0.12;
+
+                // Procedural surface: latitudinal banding (gas giants) + mottling (terrestrials),
+                // with a very slow time drift so the surface feels alive.
+                float bands = 0.5 + 0.5 * sin(N.y * 9.0);
+                float n = vnoise(N * 5.0 + vec3(uTime * 0.02));
+                n += 0.5 * vnoise(N * 12.0);
+                n /= 1.5;
+                float detail = mix(0.80, 1.20, mix(n, bands, 0.3));
+
+                vec3 col = uColor * detail * (ambient + diff * 0.95);
+
+                // Soft specular glint near the sub-solar point.
+                col += vec3(pow(diff, 16.0) * 0.18);
+
+                // Atmospheric limb glow along the terminator edge.
+                float rim = pow(1.0 - diff, 3.0) * 0.28;
+                col += uColor * rim;
+
                 gl_FragColor = vec4(col, 1.0);
             }
         """
@@ -529,13 +575,55 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
             uniform float uTime;
             varying vec3 vWorld;
             varying vec3 vNormal;
+
+            // cheap hash + 3D value noise (GLSL ES 1.00 has no builtin noise)
+            float hash(vec3 p) {
+                return fract(sin(dot(p, vec3(17.1, 113.5, 71.7))) * 43758.5453);
+            }
+            float vnoise(vec3 p) {
+                vec3 i = floor(p);
+                vec3 f = fract(p);
+                f = f * f * (3.0 - 2.0 * f);
+                float n000 = hash(i + vec3(0.0, 0.0, 0.0));
+                float n100 = hash(i + vec3(1.0, 0.0, 0.0));
+                float n010 = hash(i + vec3(0.0, 1.0, 0.0));
+                float n110 = hash(i + vec3(1.0, 1.0, 0.0));
+                float n001 = hash(i + vec3(0.0, 0.0, 1.0));
+                float n101 = hash(i + vec3(1.0, 0.0, 1.0));
+                float n011 = hash(i + vec3(0.0, 1.0, 1.0));
+                float n111 = hash(i + vec3(1.0, 1.0, 1.0));
+                float nx00 = mix(n000, n100, f.x);
+                float nx10 = mix(n010, n110, f.x);
+                float nx01 = mix(n001, n101, f.x);
+                float nx11 = mix(n011, n111, f.x);
+                return mix(mix(nx00, nx10, f.y), mix(nx01, nx11, f.y), f.z);
+            }
+
             void main() {
-                // bright emissive core with a hotter centre and warm limb
+                vec3 N = normalize(vNormal);
                 vec3 V = normalize(-vWorld);
-                float facing = max(dot(normalize(vNormal), V), 0.0);
-                float flicker = 0.93 + 0.07 * sin(uTime * 3.0 + vWorld.y * 4.0);
-                vec3 core = mix(uColor, vec3(1.0, 0.95, 0.8), facing * 0.6);
-                gl_FragColor = vec4(core * flicker * 1.25, 1.0);
+                float facing = max(dot(N, V), 0.0);
+
+                // Two octaves of drifting noise => boiling granulation across the surface.
+                float t = uTime * 0.22;
+                vec3 sp = N * 4.0;
+                float n = vnoise(sp + vec3(t, t * 0.6, -t));
+                n += 0.5 * vnoise(sp * 2.4 + vec3(-t * 1.3, t, t * 0.7));
+                n /= 1.5;
+
+                // bright plages vs darker convection lanes
+                float gran = smoothstep(0.30, 0.85, n);
+                float flicker = 0.90 + 0.10 * sin(uTime * 3.0 + n * 12.0);
+
+                vec3 hot = vec3(1.0, 0.95, 0.78);
+                vec3 col = mix(uColor * 0.7, hot, gran);   // mottled photosphere
+                col = mix(col, hot, facing * 0.45);        // hotter toward the viewer
+
+                // glowing chromosphere / limb at the silhouette edge
+                float limb = pow(1.0 - facing, 2.5);
+                col += vec3(1.0, 0.45, 0.12) * limb * 0.9;
+
+                gl_FragColor = vec4(col * flicker * 1.2, 1.0);
             }
         """
 

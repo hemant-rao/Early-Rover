@@ -162,8 +162,8 @@ object WeatherRepository {
                             rawCode = codeVal,
                             humidityPercent = hum,
                             apparentTempC = if (app.isNaN()) 0.0 else app,
-                            precipitationMm = prec,
-                            windSpeedKmh = wind
+                            precipitationMm = if (prec.isNaN()) 0.0 else prec,
+                            windSpeedKmh = if (wind.isNaN()) 0.0 else wind
                         )
                     )
                 }
