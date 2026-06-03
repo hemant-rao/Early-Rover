@@ -63,6 +63,7 @@ import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import com.example.alarm.data.Alarm
 import com.example.alarm.opengl.Celestial3DView
 import com.example.alarm.ui.weather.WeatherBackground
+import com.example.alarm.weather.AirQualityInfo
 import com.example.alarm.viewmodel.AlarmViewModel
 import com.example.ui.theme.*
 import kotlinx.coroutines.flow.drop
@@ -96,6 +97,7 @@ fun DashboardScreen(
     val lng by viewModel.longitude.collectAsStateWithLifecycle()
     val darkTheme by viewModel.darkThemeEnabled.collectAsStateWithLifecycle()
     val weather by viewModel.weather.collectAsStateWithLifecycle()
+    val airQuality by viewModel.airQuality.collectAsStateWithLifecycle()
     val savedCities by viewModel.savedCities.collectAsStateWithLifecycle()
     val tzOffset by viewModel.timezoneOffset.collectAsStateWithLifecycle()
     val isDetectingLocation by viewModel.isDetectingLocation.collectAsStateWithLifecycle()
@@ -555,6 +557,15 @@ fun DashboardScreen(
                                     onChangeLocationClick = { showLocationSearchDialog = true },
                                     showExtendedData = true
                                 )
+                            }
+                        }
+
+                        // 2b. AIR QUALITY (AQI) CARD — shown when air-quality data is available
+                        airQuality?.let { aqi ->
+                            item {
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    AirQualityCard(aqi = aqi, viewModel = viewModel)
+                                }
                             }
                         }
 
@@ -1794,6 +1805,122 @@ fun WeatherDaysList(
                                 )
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Maps a European AQI value to a qualitative label + accent color. */
+private fun europeanAqiQuality(aqi: Int): Pair<String, Color> = when {
+    aqi <= 20 -> "Good" to Color(0xFF22C55E)
+    aqi <= 40 -> "Fair" to Color(0xFF84CC16)
+    aqi <= 60 -> "Moderate" to Color(0xFFFBBF24)
+    aqi <= 80 -> "Poor" to Color(0xFFF97316)
+    aqi <= 100 -> "Very Poor" to Color(0xFFEF4444)
+    else -> "Extremely Poor" to Color(0xFF991B1B)
+}
+
+@Composable
+fun AirQualityCard(
+    aqi: AirQualityInfo,
+    viewModel: AlarmViewModel
+) {
+    val lang = viewModel.currentLanguage.collectAsStateWithLifecycle().value
+    // Prefer European AQI; fall back to US AQI. -1 means unavailable for both.
+    val useEuropean = aqi.europeanAqi >= 0
+    val displayValue = if (useEuropean) aqi.europeanAqi else aqi.usAqi
+    val (qualityLabel, accent) = if (useEuropean) {
+        europeanAqiQuality(aqi.europeanAqi)
+    } else {
+        // US AQI has its own bands; surface a neutral accent with no European label.
+        "" to SleekSecondary
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(24.dp)),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = SleekCardBg.copy(alpha = 0.85f))
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Air,
+                    contentDescription = null,
+                    tint = SleekPrimary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = translateWeatherText("AIR QUALITY", lang),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    color = SleekPrimary,
+                    letterSpacing = 1.2.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (displayValue < 0) {
+                Text(
+                    text = translateWeatherText("Air quality data unavailable", lang),
+                    fontSize = 13.sp,
+                    color = SleekMutedText,
+                    fontWeight = FontWeight.Bold
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "$displayValue",
+                        fontSize = 36.sp,
+                        fontWeight = FontWeight.Black,
+                        color = accent
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = if (useEuropean) translateWeatherText("European AQI", lang)
+                                   else translateWeatherText("US AQI", lang),
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = SleekMutedText,
+                            letterSpacing = 1.sp
+                        )
+                        if (qualityLabel.isNotEmpty()) {
+                            Text(
+                                text = translateWeatherText(qualityLabel, lang),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Black,
+                                color = accent
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Particulate matter readings — skip any value that is unavailable (NaN).
+            val showPm25 = !aqi.pm25.isNaN()
+            val showPm10 = !aqi.pm10.isNaN()
+            if (showPm25 || showPm10) {
+                Spacer(modifier = Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                    if (showPm25) {
+                        WeatherParamLabelValue(
+                            label = translateWeatherText("PM2.5", lang),
+                            value = "${aqi.pm25.toInt()} µg/m³",
+                            icon = Icons.Default.Air
+                        )
+                    }
+                    if (showPm10) {
+                        WeatherParamLabelValue(
+                            label = translateWeatherText("PM10", lang),
+                            value = "${aqi.pm10.toInt()} µg/m³",
+                            icon = Icons.Default.Air
+                        )
                     }
                 }
             }

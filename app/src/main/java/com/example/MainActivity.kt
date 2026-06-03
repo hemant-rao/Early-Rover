@@ -59,7 +59,17 @@ class MainActivity : ComponentActivity() {
                 checkIncomingAlarmIntent(intent)
             }
 
-            val darkTheme by viewModel.darkThemeEnabled.collectAsState()
+            // Adaptive theme: AUTO follows daylight at the active location, LIGHT/DARK are explicit.
+            val themeMode by viewModel.themeMode.collectAsState()
+            val weather by viewModel.weather.collectAsState()
+            val sunriseTime by viewModel.sunriseTime.collectAsState()
+            val sunsetTime by viewModel.sunsetTime.collectAsState()
+            // Prefer the live weather day/night signal; fall back to current-hour vs sunrise/sunset.
+            val isDayAtLocation = weather?.isDay ?: run {
+                val now = java.time.LocalTime.now()
+                !now.isBefore(sunriseTime) && now.isBefore(sunsetTime)
+            }
+            val darkTheme = viewModel.isEffectiveDark(isDayAtLocation)
             val switching by viewModel.isSwitchingLanguage.collectAsState()
 
             // Request location permissions at startup

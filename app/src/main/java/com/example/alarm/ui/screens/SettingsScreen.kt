@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.alarm.viewmodel.AlarmViewModel
+import com.example.alarm.viewmodel.ThemeMode
 import com.example.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -33,7 +34,7 @@ fun SettingsScreen(
     viewModel: AlarmViewModel,
     onNavigateBack: () -> Unit
 ) {
-    val darkTheme by viewModel.darkThemeEnabled.collectAsState()
+    val themeMode by viewModel.themeMode.collectAsState()
     val defaultSnoozeMinutes by viewModel.defaultSnoozeMinutes.collectAsState()
     val currentLang by viewModel.currentLanguage.collectAsState()
 
@@ -92,7 +93,11 @@ fun SettingsScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
-                                imageVector = if (darkTheme) Icons.Default.ModeNight else Icons.Default.LightMode,
+                                imageVector = when (themeMode) {
+                                    ThemeMode.DARK -> Icons.Default.ModeNight
+                                    ThemeMode.LIGHT -> Icons.Default.LightMode
+                                    ThemeMode.AUTO -> Icons.Default.BrightnessAuto
+                                },
                                 contentDescription = null,
                                 tint = SleekSecondary,
                                 modifier = Modifier.size(20.dp)
@@ -103,17 +108,49 @@ fun SettingsScreen(
                             Text(viewModel.translate("Dark Mode"), fontWeight = FontWeight.Bold, color = SleekActiveText, fontSize = 15.sp)
                             Text(viewModel.translate("Render dark celestial color profiles"), fontSize = 12.sp, color = SleekMutedText)
                         }
-                        Switch(
-                            checked = darkTheme,
-                            onCheckedChange = { viewModel.toggleDarkThemeSetting() },
-                            modifier = Modifier.testTag("theme_switch"),
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = SleekPrimary,
-                                uncheckedThumbColor = Color.Gray,
-                                uncheckedTrackColor = SleekBorder
-                            )
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Light / Dark / Auto segmented selector. AUTO follows daylight at the location.
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        val themeOptions = listOf(
+                            ThemeMode.LIGHT to viewModel.translate("Light"),
+                            ThemeMode.DARK to viewModel.translate("Dark"),
+                            ThemeMode.AUTO to viewModel.translate("Auto")
                         )
+                        themeOptions.forEach { (mode, label) ->
+                            val isSelected = themeMode == mode
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        if (isSelected) SleekPrimary else SleekBorder.copy(alpha = 0.5f)
+                                    )
+                                    .clickable { viewModel.setThemeMode(mode) }
+                                    .border(
+                                        BorderStroke(
+                                            width = 1.dp,
+                                            color = if (isSelected) SleekSecondary else Color.Transparent
+                                        ),
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    .padding(vertical = 12.dp)
+                                    .testTag("theme_opt_${mode.name}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isSelected) Color.White else SleekMutedText
+                                )
+                            }
+                        }
                     }
                 }
             }

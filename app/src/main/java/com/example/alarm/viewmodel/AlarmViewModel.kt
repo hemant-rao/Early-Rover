@@ -20,18 +20,22 @@ import com.example.alarm.scheduling.AlarmService
 import com.example.alarm.weather.WeatherInfo
 import com.example.alarm.weather.WeatherRepository
 import com.example.alarm.weather.DetailedWeatherInfo
+import com.example.alarm.weather.AirQualityInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalTime
 import java.util.Calendar
+import kotlin.math.abs
 
 data class RingingAlarmState(
     val id: Int,
     val title: String,
     val type: String
 )
+
+enum class ThemeMode { LIGHT, DARK, AUTO }
 
 class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -40,6 +44,15 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     private val scheduler = AlarmScheduler(application)
     private val locationHelper = LocationHelper(application)
     private var searchJob: kotlinx.coroutines.Job? = null
+
+    // Guards async location callbacks from mutating StateFlows after the ViewModel is destroyed.
+    @Volatile private var cleared = false
+
+    override fun onCleared() {
+        cleared = true
+        locationHelper.cancelLocationRequest()
+        super.onCleared()
+    }
 
     // UI state flows
     val allAlarms: StateFlow<List<Alarm>> = repository.allAlarms
@@ -57,9 +70,15 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     val alarmsForCurrentLocation: StateFlow<List<Alarm>> = combine(
         repository.allAlarms,
-        _locationName
-    ) { alarms, locationName ->
-        alarms.filter { it.locationName == locationName }
+        _locationName,
+        _latitude,
+        _longitude
+    ) { alarms, name, lat, lng ->
+        alarms.filter { a ->
+            a.locationName.isEmpty() ||
+                a.locationName == name ||
+                (abs(a.latitude - lat) < 0.05 && abs(a.longitude - lng) < 0.05)
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _timezoneOffset = MutableStateFlow(locationHelper.getSavedTimezoneOffset())
@@ -84,6 +103,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _detailedWeather = MutableStateFlow<DetailedWeatherInfo?>(null)
     val detailedWeather: StateFlow<DetailedWeatherInfo?> = _detailedWeather.asStateFlow()
+
+    private val _airQuality = MutableStateFlow<AirQualityInfo?>(null)
+    val airQuality: StateFlow<AirQualityInfo?> = _airQuality.asStateFlow()
 
     private val _isWeatherLoading = MutableStateFlow(false)
     val isWeatherLoading: StateFlow<Boolean> = _isWeatherLoading.asStateFlow()
@@ -118,6 +140,33 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     
     private val _darkThemeEnabled = MutableStateFlow(settingsPrefs.getBoolean("dark_theme", true))
     val darkThemeEnabled: StateFlow<Boolean> = _darkThemeEnabled.asStateFlow()
+
+    // Adaptive theme mode. Defaults derive from the legacy "dark_theme" flag for back-compat.
+    private val _themeMode = MutableStateFlow(
+        run {
+            val stored = settingsPrefs.getString("theme_mode", null)
+            if (stored != null) {
+                runCatching { ThemeMode.valueOf(stored) }.getOrDefault(
+                    if (settingsPrefs.getBoolean("dark_theme", true)) ThemeMode.DARK else ThemeMode.LIGHT
+                )
+            } else {
+                if (settingsPrefs.getBoolean("dark_theme", true)) ThemeMode.DARK else ThemeMode.LIGHT
+            }
+        }
+    )
+    val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+
+    fun setThemeMode(m: ThemeMode) {
+        _themeMode.value = m
+        settingsPrefs.edit().putString("theme_mode", m.name).apply()
+    }
+
+    /** Resolves the active theme: AUTO follows daylight at the location; DARK/LIGHT are explicit. */
+    fun isEffectiveDark(isDayAtLocation: Boolean): Boolean = when (_themeMode.value) {
+        ThemeMode.AUTO -> !isDayAtLocation
+        ThemeMode.DARK -> true
+        ThemeMode.LIGHT -> false
+    }
 
     private val _defaultSnoozeMinutes = MutableStateFlow(settingsPrefs.getInt("default_snooze", 5))
     val defaultSnoozeMinutes: StateFlow<Int> = _defaultSnoozeMinutes.asStateFlow()
@@ -309,9 +358,23 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun refreshWeather() {
+    // Weather refetch throttle: skip if we recently fetched for ~the same coordinates.
+    private var lastWeatherFetchMs = 0L
+    private var lastWeatherLat = Double.NaN
+    private var lastWeatherLng = Double.NaN
+
+    fun refreshWeather(force: Boolean = false) {
         val lat = _latitude.value
         val lng = _longitude.value
+        val now = System.currentTimeMillis()
+        if (!force &&
+            _detailedWeather.value != null &&
+            now - lastWeatherFetchMs < 10 * 60 * 1000 &&
+            abs(lat - lastWeatherLat) < 0.05 &&
+            abs(lng - lastWeatherLng) < 0.05
+        ) {
+            return
+        }
         _isWeatherLoading.value = true
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -325,6 +388,14 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                         _weather.value = info
                     }
                 }
+                // Air quality for the same coordinates (null-safe; leaves prior value on failure).
+                val aqi = WeatherRepository.fetchAirQuality(lat, lng)
+                if (aqi != null) {
+                    _airQuality.value = aqi
+                }
+                lastWeatherFetchMs = now
+                lastWeatherLat = lat
+                lastWeatherLng = lng
             } catch (e: Exception) {
                 Log.e("AlarmViewModel", "Weather refresh failed: ", e)
             } finally {
@@ -337,7 +408,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         val lat = _latitude.value
         val lng = _longitude.value
         val offset = _timezoneOffset.value
-        val today = LocalDate.now()
+        val today = LocalDate.now(SunAlarmResolver.zoneOf(offset))
         val tomorrow = today.plusDays(1)
 
         val todayTimes = SunCalculator.calculateSunTimes(lat, lng, today, offset)
@@ -529,7 +600,12 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             // CUSTOM alarms pass through recalibrate untouched, but the alarm list is filtered per
             // active city — so still tag them with the active location's name to keep them visible.
             val finalAlarm = if (recalced.alarmType == "CUSTOM") {
-                recalced.copy(locationName = _locationName.value)
+                recalced.copy(
+                    locationName = _locationName.value,
+                    latitude = _latitude.value,
+                    longitude = _longitude.value,
+                    timezoneOffset = _timezoneOffset.value
+                )
             } else {
                 recalced
             }
@@ -573,6 +649,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         locationHelper.setAutoDetect(true)
         locationHelper.requestCurrentLocation(
             onSuccess = { lat, lng, offset, name ->
+                if (cleared) return@requestCurrentLocation
                 _isDetectingLocation.value = false
                 _latitude.value = lat
                 _longitude.value = lng
@@ -597,6 +674,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 saveCitiesToPrefs(current)
             },
             onFailure = { e ->
+                if (cleared) return@requestCurrentLocation
                 _isDetectingLocation.value = false
                 Log.e("AlarmViewModel", "Failed to detect automatic GPS location", e)
             }
