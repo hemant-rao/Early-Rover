@@ -378,7 +378,7 @@ fun AddEditAlarmScreen(
                                     ),
                                     java.time.LocalDate.now(),
                                     alarm.offsetMinutes
-                                )
+                                ).toLocalTime()
                             } else {
                                 val event = if (alarm.alarmType == "SUNRISE") sunriseTime else sunsetTime
                                 event.plusMinutes(alarm.offsetMinutes.toLong())

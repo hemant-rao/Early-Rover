@@ -1,8 +1,10 @@
 package com.example.alarm.data
 
+import com.example.alarm.PolarState
 import com.example.alarm.SunCalculator
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
@@ -50,20 +52,35 @@ object SunAlarmResolver {
         ZoneOffset.ofTotalSeconds(Math.round(timezoneOffsetHours * 3600.0).toInt())
 
     /**
-     * Clock time a SUNRISE/SUNSET alarm should fire at on [date], at [location], including the
-     * user's before/after [offsetMinutes]. Falls back to 06:00 / 18:00 for polar days where the sun
-     * never rises or sets (matching the rest of the app).
+     * Date+time a SUNRISE/SUNSET alarm should fire at on [date], at [location], including the user's
+     * before/after [offsetMinutes].
+     *
+     * Returns a [LocalDateTime] (not a bare [LocalTime]) so a negative [offsetMinutes] that pushes the
+     * moment before midnight correctly rolls back to the previous calendar day instead of silently
+     * wrapping to a wrong time on the same day.
+     *
+     * Polar handling (sun never rises/sets that day) picks a sensible substitute base time:
+     *  - POLAR_DAY (sun up all day): a SUNRISE is treated as already-risen at 00:00; a SUNSET as the
+     *    last moment of the day, 23:59.
+     *  - POLAR_NIGHT (sun down all day): falls back to the app's nominal 06:00 / 18:00.
+     * The plain 06:00 / 18:00 defaults are kept only as a no-data fallback (PolarState.NONE but a null
+     * time, which should not normally happen).
      */
-    fun targetTime(alarmType: String, location: Location, date: LocalDate, offsetMinutes: Int): LocalTime {
+    fun targetTime(alarmType: String, location: Location, date: LocalDate, offsetMinutes: Int): LocalDateTime {
         val sun = SunCalculator.calculateSunTimes(
             location.latitude, location.longitude, date, location.timezoneOffset
         )
-        val base = if (alarmType == "SUNRISE") {
-            sun.sunrise ?: LocalTime.of(6, 0)
-        } else {
-            sun.sunset ?: LocalTime.of(18, 0)
+        val isSunrise = alarmType == "SUNRISE"
+        val base: LocalTime = when (sun.polar) {
+            PolarState.POLAR_DAY ->
+                if (isSunrise) LocalTime.of(0, 0) else LocalTime.of(23, 59)
+            PolarState.POLAR_NIGHT ->
+                if (isSunrise) LocalTime.of(6, 0) else LocalTime.of(18, 0)
+            PolarState.NONE ->
+                if (isSunrise) (sun.sunrise ?: LocalTime.of(6, 0))
+                else (sun.sunset ?: LocalTime.of(18, 0))
         }
-        return base.plusMinutes(offsetMinutes.toLong())
+        return date.atTime(base).plusMinutes(offsetMinutes.toLong())
     }
 
     /**
@@ -83,6 +100,8 @@ object SunAlarmResolver {
         return alarm.copy(
             hour = target.hour,
             minute = target.minute,
+            // target may roll to the previous day for large negative offsets; hour/minute is still the
+            // wall-clock the scheduler interprets per-date via fireTimeOn, so only the clock time is stored.
             latitude = loc.latitude,
             longitude = loc.longitude,
             timezoneOffset = loc.timezoneOffset,
@@ -108,9 +127,12 @@ object SunAlarmResolver {
         val repeatDays = alarm.getRepeatDaysList()
 
         if (repeatDays.isEmpty()) {
-            val todayFire = today.atTime(alarm.hour, alarm.minute).atZone(zone).toInstant()
+            val todayFire = today.atTime(fireTimeOn(alarm, today)).atZone(zone).toInstant()
             return if (todayFire.isAfter(now)) todayFire
-            else today.plusDays(1).atTime(alarm.hour, alarm.minute).atZone(zone).toInstant()
+            else {
+                val tomorrow = today.plusDays(1)
+                tomorrow.atTime(fireTimeOn(alarm, tomorrow)).atZone(zone).toInstant()
+            }
         }
 
         // Repeating: nearest selected weekday whose time is strictly in the future.
@@ -118,13 +140,28 @@ object SunAlarmResolver {
         for (add in 0..7) {
             val day = today.plusDays(add.toLong())
             if (repeatDays.contains(day.dayOfWeek.value)) {
-                val fire = day.atTime(alarm.hour, alarm.minute).atZone(zone).toInstant()
+                val fire = day.atTime(fireTimeOn(alarm, day)).atZone(zone).toInstant()
                 if (fire.isAfter(now)) return fire
             }
         }
         // Unreachable in practice (a non-empty repeat set always matches within 8 days).
-        return today.atTime(alarm.hour, alarm.minute).atZone(zone).toInstant()
+        return today.atTime(fireTimeOn(alarm, today)).atZone(zone).toInstant()
     }
+
+    /**
+     * The wall-clock time [alarm] should fire at on a SPECIFIC [date], in its own zone's terms.
+     *
+     * For a location-bound SUNRISE/SUNSET this recomputes the sun time for THAT date (sunrise/sunset
+     * drift day to day, so reusing the cached [Alarm.hour]/[Alarm.minute] would slowly go stale). For
+     * CUSTOM and unbound alarms the stored clock digits are authoritative and returned as-is.
+     */
+    fun fireTimeOn(alarm: Alarm, date: LocalDate): LocalTime =
+        if ((alarm.alarmType == "SUNRISE" || alarm.alarmType == "SUNSET") && alarm.hasLocation()) {
+            val loc = Location(alarm.latitude, alarm.longitude, alarm.timezoneOffset, alarm.locationName)
+            targetTime(alarm.alarmType, loc, date, alarm.offsetMinutes).toLocalTime()
+        } else {
+            LocalTime.of(alarm.hour, alarm.minute)
+        }
 
     /** The zone an alarm's stored hour/minute must be interpreted in. */
     private fun zoneFor(alarm: Alarm, deviceZone: ZoneId): ZoneId =

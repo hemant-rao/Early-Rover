@@ -4,9 +4,19 @@ import java.time.LocalDate
 import java.time.LocalTime
 import kotlin.math.*
 
+/**
+ * Distinguishes the two "no sun event" cases that both yield null sunrise/sunset, so callers can
+ * pick sensible substitute times (the sun is already up all day vs. down all day).
+ */
+enum class PolarState { NONE, POLAR_DAY, POLAR_NIGHT }
+
 object SunCalculator {
 
-    data class SunTimes(val sunrise: LocalTime?, val sunset: LocalTime?)
+    data class SunTimes(
+        val sunrise: LocalTime?,
+        val sunset: LocalTime?,
+        val polar: PolarState = PolarState.NONE
+    )
 
     /**
      * Calculates the sunrise and sunset times for a given coordinate, date, and timezone offset.
@@ -40,11 +50,11 @@ object SunCalculator {
         
         if (cosH > 1.0) {
             // Polar night (sun never rises)
-            return SunTimes(null, null)
+            return SunTimes(null, null, PolarState.POLAR_NIGHT)
         }
         if (cosH < -1.0) {
             // Polar day (sun never sets)
-            return SunTimes(null, null)
+            return SunTimes(null, null, PolarState.POLAR_DAY)
         }
 
         val haRad = acos(cosH)
@@ -60,11 +70,16 @@ object SunCalculator {
         val sunriseLocalMinutes = (sunriseUtc + offsetMinutes + 1440.0) % 1440.0
         val sunsetLocalMinutes = (sunsetUtc + offsetMinutes + 1440.0) % 1440.0
 
-        val sunriseHour = (sunriseLocalMinutes / 60.0).toInt() % 24
-        val sunriseMin = (sunriseLocalMinutes % 60.0).toInt()
-        
-        val sunsetHour = (sunsetLocalMinutes / 60.0).toInt() % 24
-        val sunsetMin = (sunsetLocalMinutes % 60.0).toInt()
+        // Round to the nearest minute (less biased than truncation). The % 1440 carry guard prevents
+        // a rounded-up value of exactly 1440 from producing an invalid hour 24.
+        val sunriseTotal = Math.round(sunriseLocalMinutes).toInt() % 1440
+        val sunsetTotal = Math.round(sunsetLocalMinutes).toInt() % 1440
+
+        val sunriseHour = sunriseTotal / 60
+        val sunriseMin = sunriseTotal % 60
+
+        val sunsetHour = sunsetTotal / 60
+        val sunsetMin = sunsetTotal % 60
 
         return SunTimes(
             LocalTime.of(sunriseHour, sunriseMin),

@@ -339,6 +339,6 @@ class SunAlarmResolverTest {
         val fire = instant.atZone(ZoneOffset.ofHours(9))
 
         assertEquals(date, fire.toLocalDate())
-        assertEquals(target, fire.toLocalTime())
+        assertEquals(target.toLocalTime(), fire.toLocalTime())
     }
 }
