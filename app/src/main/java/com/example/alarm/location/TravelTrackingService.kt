@@ -30,6 +30,8 @@ import com.example.alarm.data.TravelAlarm
 import com.google.android.gms.location.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -39,7 +41,7 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
-    private val serviceScope = CoroutineScope(Dispatchers.Main)
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     
     private var textToSpeech: TextToSpeech? = null
     private var isTtsReady = false
@@ -208,13 +210,9 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
                 val location = locationResult.lastLocation ?: return
-                
-                // Ignore updates with accuracy worse than 50 meters to prevent GPS jitter and false triggers
-                if (location.hasAccuracy() && location.accuracy > 50f) {
-                    Log.d(TAG, "Ignoring location update due to high GPS jitter/poor accuracy: ${location.accuracy}m")
-                    return
-                }
 
+                // Always update live location/speed/UI even for a coarse fix, so the UI never
+                // freezes. Accuracy is only used later to gate the one-shot arrival trigger.
                 _currentLocation.value = location
                 
                 // Convert m/s speed to km/h speed safely
@@ -273,7 +271,12 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
 
                 // Proximity threshold penetrated! Set.add(id) returns false if already fired,
                 // so each arrival triggers exactly once instead of on every location update.
-                if (distance <= alarm.radiusKm && triggeredAlarmIds.add(alarm.id)) {
+                // Gate firing on accuracy so we don't false-trigger on a jittery fix, but scale
+                // the gate to the radius: a coarse fix well inside a large radius can still wake
+                // the user. A missing accuracy reading is treated as acceptable.
+                val gateMeters = minOf(50.0, alarm.radiusKm * 1000.0 * 0.25)
+                val accurateEnough = !location.hasAccuracy() || location.accuracy <= gateMeters
+                if (distance <= alarm.radiusKm && accurateEnough && triggeredAlarmIds.add(alarm.id)) {
                     triggerArrivalAlarm(alarm, distance)
                 }
             }
@@ -317,9 +320,6 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
-    private fun triggerArrivalAlarm(alarm: TravelAlarm, distanceKm: Int /* unused but let's take double */) {}
-    
-    // Proper double signature overload
     private fun triggerArrivalAlarm(alarm: TravelAlarm, distanceKm: Double) {
         try {
             Log.e(TAG, "PROXIMITY DETECTED! Triggering alarm for: ${alarm.label}")
@@ -590,6 +590,32 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
     // individually guarded, and lateinit fields are only touched once initialized, so an
     // early/very-fast stop can never crash the process with UninitializedPropertyAccessException.
     private fun cleanupResources() {
+        // Cancel in-flight coroutines (IO DB writes, the flashlight blink loop) FIRST so they
+        // stop before the static StateFlows below are reset and the torch is forced off. The
+        // blink loop's delay(400) is a cancellation point, so the flashlight stops promptly.
+        try {
+            serviceScope.cancel()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed cancelling service scope", e)
+        }
+
+        // Force the torch OFF immediately so it does not keep blinking until the loop's
+        // final iteration. Guarded: the camera/flash may be unavailable.
+        try {
+            val cameraManager = getSystemService(Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
+            if (cameraManager != null) {
+                val flashId = cameraManager.cameraIdList.firstOrNull { id ->
+                    cameraManager.getCameraCharacteristics(id)
+                        .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                }
+                if (flashId != null) {
+                    cameraManager.setTorchMode(flashId, false)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed forcing torch off", e)
+        }
+
         try {
             _startLocation.value = null
             _totalTripDistanceKm.value = 0.0

@@ -26,6 +26,15 @@ class LocationHelper(private val context: Context) {
 
     private val prefs: SharedPreferences = context.getSharedPreferences("sun_alarm_location_prefs", Context.MODE_PRIVATE)
 
+    // In-flight FusedLocation cancellation token, promoted to a field so an external
+    // caller can abort a pending current-location request.
+    private var locationCts: CancellationTokenSource? = null
+
+    fun cancelLocationRequest() {
+        locationCts?.cancel()
+        locationCts = null
+    }
+
     companion object {
         val WORLD_CITIES = listOf(
             CityInfo("New York", "United States", 40.7128, -74.0060, -5.0),
@@ -101,15 +110,28 @@ class LocationHelper(private val context: Context) {
                     }
 
                     if (provider != null) {
-                        locationManager.requestSingleUpdate(provider, object : android.location.LocationListener {
+                        val timeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                        val singleListener = object : android.location.LocationListener {
                             override fun onLocationChanged(location: Location) {
+                                timeoutHandler.removeCallbacksAndMessages(null)
                                 processLocation(location, onSuccess, onFailure)
                             }
                             @Deprecated("Deprecated in Java")
                             override fun onStatusChanged(p0: String?, p1: Int, p2: android.os.Bundle?) {}
                             override fun onProviderEnabled(p0: String) {}
                             override fun onProviderDisabled(p0: String) {}
-                        }, android.os.Looper.getMainLooper())
+                        }
+                        locationManager.requestSingleUpdate(provider, singleListener, android.os.Looper.getMainLooper())
+                        // If no fix arrives within 15s, stop listening (avoids a leaked listener)
+                        // and route to the IP-based fallback so the caller is not left hanging.
+                        timeoutHandler.postDelayed({
+                            try {
+                                locationManager.removeUpdates(singleListener)
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                            fetchIPLocationFallback(onSuccess, onFailure)
+                        }, 15000L)
                     } else {
                         // Dynamic IP Geolocation fallback as a final failsafe if no LocationManager providers are active
                         fetchIPLocationFallback(onSuccess, onFailure)
@@ -345,6 +367,7 @@ class LocationHelper(private val context: Context) {
         val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
         try {
             val cts = CancellationTokenSource()
+            locationCts = cts
             fusedLocationClient.getCurrentLocation(
                 Priority.PRIORITY_HIGH_ACCURACY,
                 cts.token

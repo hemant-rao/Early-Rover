@@ -85,6 +85,11 @@ fun LocationHeader(
             }
         }
     } else {
+        LaunchedEffect(savedCities.size) {
+            if (savedCities.isNotEmpty() && pagerState.currentPage > savedCities.lastIndex) {
+                pagerState.scrollToPage(savedCities.lastIndex)
+            }
+        }
         LaunchedEffect(activeCityIndex, savedCities.size) {
             if (activeCityIndex in savedCities.indices &&
                 pagerState.currentPage != activeCityIndex
@@ -116,8 +121,9 @@ fun LocationHeader(
                 state = pagerState,
                 modifier = Modifier.weight(1f)
             ) { page ->
+                val city = savedCities.getOrNull(page) ?: return@HorizontalPager
                 Text(
-                    text = savedCities[page].name,
+                    text = city.name,
                     style = MaterialTheme.typography.titleLarge.copy(
                         fontWeight = FontWeight.Bold,
                         color = SleekActiveText

@@ -91,6 +91,23 @@ fun TravelAlarmScreen(
     var startLat by remember { mutableStateOf("") }
     var startLng by remember { mutableStateOf("") }
 
+    // GPS detection state for the "use my location" button in the start field.
+    // The permission/detection is async, so coordinates are not available
+    // synchronously on click; this flag lets a LaunchedEffect fill them in once ready.
+    var awaitingGpsForStart by remember { mutableStateOf(false) }
+    val gpsLatitude by viewModel.latitude.collectAsStateWithLifecycle()
+    val gpsLongitude by viewModel.longitude.collectAsStateWithLifecycle()
+    val gpsLocationName by viewModel.locationName.collectAsStateWithLifecycle()
+
+    LaunchedEffect(awaitingGpsForStart, gpsLatitude, gpsLongitude) {
+        if (awaitingGpsForStart && gpsLatitude != 0.0 && gpsLongitude != 0.0) {
+            startLabel = if (gpsLocationName.isNotEmpty()) gpsLocationName else "My Location"
+            startLat = gpsLatitude.toString()
+            startLng = gpsLongitude.toString()
+            awaitingGpsForStart = false
+        }
+    }
+
     // Remote lookup parameters
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<CityInfo>>(emptyList()) }
@@ -829,21 +846,17 @@ fun TravelAlarmScreen(
                                 )
                                 IconButton(
                                     onClick = {
-                                        // Trigger my location retrieval
+                                        // Trigger my location retrieval. Detection is async, so we set
+                                        // a flag and let the LaunchedEffect fill the fields once the
+                                        // GPS coordinates actually arrive (rather than reading the
+                                        // still-stale values synchronously here).
+                                        awaitingGpsForStart = true
                                         locationPermissionLauncher.launch(
                                             arrayOf(
                                                 Manifest.permission.ACCESS_FINE_LOCATION,
                                                 Manifest.permission.ACCESS_COARSE_LOCATION
                                             )
                                         )
-                                        val lat = viewModel.latitude.value
-                                        val lng = viewModel.longitude.value
-                                        val name = viewModel.locationName.value
-                                        if (lat != 0.0 && lng != 0.0) {
-                                            startLabel = if (name.isNotEmpty()) name else "My Location"
-                                            startLat = lat.toString()
-                                            startLng = lng.toString()
-                                        }
                                     },
                                     modifier = Modifier.size(28.dp)
                                 ) {

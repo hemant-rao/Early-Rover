@@ -28,6 +28,7 @@ fun ManageCitiesScreen(
     onNavigateBack: () -> Unit
 ) {
     val savedCities by viewModel.savedCities.collectAsState()
+    val locationName by viewModel.locationName.collectAsState()
 
     Scaffold(
         topBar = {
@@ -49,7 +50,7 @@ fun ManageCitiesScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             itemsIndexed(savedCities) { index, city ->
-                val isCurrentLocation = index == 0 // Assuming index 0 is current location
+                val isCurrentLocation = city.name.equals(locationName, ignoreCase = true)
 
                 Card(
                     modifier = Modifier
