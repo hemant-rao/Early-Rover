@@ -1,5 +1,7 @@
 package com.example.alarm.weather
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -50,6 +52,13 @@ data class DailyDetail(
     val sunsetIso: String
 )
 
+data class AirQualityInfo(
+    val europeanAqi: Int,
+    val usAqi: Int,
+    val pm25: Double,
+    val pm10: Double
+)
+
 data class DetailedWeatherInfo(
     val current: WeatherInfo,
     val relativeHumidity: Int,
@@ -77,7 +86,11 @@ object WeatherRepository {
                 connectTimeout = 5000
                 readTimeout = 5000
             }
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                connection.errorStream?.use { it.readBytes() }
+                connection.disconnect()
+                return null
+            }
 
             val response = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
             val current = JSONObject(response).optJSONObject("current") ?: return null
@@ -93,6 +106,42 @@ object WeatherRepository {
             null
         }
     }
+
+    /**
+     * Fetches current air-quality indices (European AQI, US AQI) and particulate matter
+     * concentrations from the key-less Open-Meteo air-quality API. Returns null on any failure.
+     */
+    suspend fun fetchAirQuality(latitude: Double, longitude: Double): AirQualityInfo? =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = URL(
+                    "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=$latitude&longitude=$longitude" +
+                        "&current=european_aqi,us_aqi,pm2_5,pm10&timezone=auto"
+                )
+                val connection = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                }
+                if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                    connection.errorStream?.use { it.readBytes() }
+                    connection.disconnect()
+                    return@withContext null
+                }
+
+                val response = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
+                val current = JSONObject(response).optJSONObject("current") ?: return@withContext null
+
+                val europeanAqi = current.optInt("european_aqi", -1)
+                val usAqi = current.optInt("us_aqi", -1)
+                val pm25 = current.optDouble("pm2_5", Double.NaN)
+                val pm10 = current.optDouble("pm10", Double.NaN)
+                AirQualityInfo(europeanAqi, usAqi, pm25, pm10)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                null
+            }
+        }
 
     /**
      * Fetches details required for high fidelity Weather apps:
@@ -118,7 +167,11 @@ object WeatherRepository {
                 connectTimeout = 8000
                 readTimeout = 8000
             }
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                connection.errorStream?.use { it.readBytes() }
+                connection.disconnect()
+                return null
+            }
 
             val response = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
             val root = JSONObject(response)
@@ -151,7 +204,7 @@ object WeatherRepository {
                 for (i in 0 until length) {
                     val tIso = times?.optString(i) ?: ""
                     val tVal = temps?.optDouble(i) ?: 0.0
-                    val codeVal = codes?.optInt(i, 0) ?: 0
+                    val codeVal = codes?.optInt(i, -1) ?: -1
                     val hum = humidities?.optInt(i, 0) ?: 0
                     val app = appTemps?.optDouble(i) ?: 0.0
                     val prec = precips?.optDouble(i) ?: 0.0
@@ -186,7 +239,7 @@ object WeatherRepository {
                 val length = times?.length() ?: 0
                 for (i in 0 until length) {
                     val dIso = times?.optString(i) ?: ""
-                    val codeVal = codes?.optInt(i, 0) ?: 0
+                    val codeVal = codes?.optInt(i, -1) ?: -1
                     val maxT = maxTemps?.optDouble(i) ?: 0.0
                     val minT = minTemps?.optDouble(i) ?: 0.0
                     val rise = sunrises?.optString(i) ?: ""
