@@ -5,6 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import com.example.alarm.data.AppDatabase
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -25,6 +29,24 @@ class AlarmReceiver : BroadcastReceiver() {
             context.startForegroundService(serviceIntent)
         } else {
             context.startService(serviceIntent)
+        }
+
+        // 1b. Re-arm the next occurrence independently of the notification dismiss path so a
+        // repeating alarm survives even if the user never opens/dismisses the notification.
+        // schedule() computes the NEXT occurrence, so this won't immediately re-trigger; it shares
+        // the same request code as the dismiss-path re-arm, making it idempotent.
+        val pr = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                if (alarmId != -1) {
+                    val a = AppDatabase.getDatabase(context).alarmDao().getAlarmById(alarmId)
+                    if (a != null && a.active && a.isRepeating()) AlarmScheduler(context).schedule(a)
+                }
+            } catch (e: Exception) {
+                Log.e("AlarmReceiver", "re-arm failed", e)
+            } finally {
+                pr.finish()
+            }
         }
 
         // 2. Launch MainActivity as full-screen companion

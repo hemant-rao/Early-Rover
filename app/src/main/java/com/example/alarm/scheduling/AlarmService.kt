@@ -24,6 +24,8 @@ import com.example.alarm.data.Alarm
 import com.example.alarm.data.AppDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.io.IOException
 
@@ -31,7 +33,7 @@ class AlarmService : Service() {
 
     private var mediaPlayer: MediaPlayer? = null
     private var vibrator: Vibrator? = null
-    private val serviceScope = CoroutineScope(Dispatchers.Main)
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -70,12 +72,20 @@ class AlarmService : Service() {
         } else {
             0
         }
-        ServiceCompat.startForeground(
-            this,
-            NOTIFICATION_ID,
-            buildForegroundNotification(alarmId, alarmTitle, alarmType),
-            serviceType
-        )
+        try {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildForegroundNotification(alarmId, alarmTitle, alarmType),
+                serviceType
+            )
+        } catch (e: Exception) {
+            // On API 34+ a background-started FGS can throw; fall back to a plain notification so
+            // the user still sees the alarm, then continue to play sound/vibrate below.
+            Log.e("AlarmService", "startForeground failed, falling back to plain notification", e)
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .notify(NOTIFICATION_ID, buildForegroundNotification(alarmId, alarmTitle, alarmType))
+        }
 
         if (alarmId != -1) {
             serviceScope.launch {
@@ -170,57 +180,73 @@ class AlarmService : Service() {
     }
 
     private fun dismissAlarm(alarmId: Int) {
-        stopSelf()
+        // Silence the ring immediately, but defer stopSelf() until the DB/reschedule work is done so
+        // we don't tear the service (and its scope) down before the coroutine runs.
+        mediaPlayer?.stop()
         if (alarmId != -1) {
             serviceScope.launch {
-                val db = AppDatabase.getDatabase(this@AlarmService)
-                val dao = db.alarmDao()
-                val alarm = dao.getAlarmById(alarmId)
-                if (alarm != null) {
-                    if (!alarm.isRepeating()) {
-                        // Deactivate single-use alarm
-                        dao.updateAlarm(alarm.copy(active = false))
-                    } else {
-                        // Repeating alarm, reschedule next occurrence
-                        AlarmScheduler(this@AlarmService).schedule(alarm)
+                try {
+                    val db = AppDatabase.getDatabase(this@AlarmService)
+                    val dao = db.alarmDao()
+                    val alarm = dao.getAlarmById(alarmId)
+                    if (alarm != null) {
+                        if (!alarm.isRepeating()) {
+                            // Deactivate single-use alarm
+                            dao.updateAlarm(alarm.copy(active = false))
+                        } else {
+                            // Repeating alarm, reschedule next occurrence
+                            AlarmScheduler(this@AlarmService).schedule(alarm)
+                        }
                     }
+                } finally {
+                    stopSelf()
                 }
             }
+        } else {
+            stopSelf()
         }
     }
 
     private fun snoozeAlarm(alarmId: Int, title: String, type: String) {
-        stopSelf()
+        // Silence the ring immediately, but defer stopSelf() until the snooze is scheduled.
+        mediaPlayer?.stop()
         if (alarmId != -1) {
             serviceScope.launch {
-                val db = AppDatabase.getDatabase(this@AlarmService)
-                val dao = db.alarmDao()
-                val alarm = dao.getAlarmById(alarmId)
-                val snoozeTimeMinutes = alarm?.snoozeMinutes ?: 5
-                
-                // Create relative intent for snooze alarm triggers
-                val snoozeIntent = Intent(this@AlarmService, AlarmReceiver::class.java).apply {
-                    putExtra("ALARM_ID", alarmId)
-                    putExtra("ALARM_TITLE", "$title (Snoozed)")
-                    putExtra("ALARM_TYPE", type)
+                try {
+                    val db = AppDatabase.getDatabase(this@AlarmService)
+                    val dao = db.alarmDao()
+                    val alarm = dao.getAlarmById(alarmId)
+                    val snoozeTimeMinutes = alarm?.snoozeMinutes ?: 5
+
+                    // Create relative intent for snooze alarm triggers
+                    val snoozeIntent = Intent(this@AlarmService, AlarmReceiver::class.java).apply {
+                        action = "ACTION_SNOOZE_FIRE" // keep this PendingIntent's identity from colliding with a base alarm's
+                        putExtra("ALARM_ID", alarmId)
+                        putExtra("ALARM_TITLE", "$title (Snoozed)")
+                        putExtra("ALARM_TYPE", type)
+                    }
+                    val pendingIntent = PendingIntent.getBroadcast(
+                        this@AlarmService,
+                        alarmId + 100000, // offset request code to avoid collision
+                        snoozeIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+
+                    val triggerAtMillis = System.currentTimeMillis() + (snoozeTimeMinutes * 60 * 1000)
+                    val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                    } else {
+                        alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                    }
+                    Log.d("AlarmService", "Snoozed alarm $alarmId for $snoozeTimeMinutes minutes")
+                } finally {
+                    stopSelf()
                 }
-                val pendingIntent = PendingIntent.getBroadcast(
-                    this@AlarmService,
-                    alarmId + 100000, // offset request code to avoid collision
-                    snoozeIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-                
-                val triggerAtMillis = System.currentTimeMillis() + (snoozeTimeMinutes * 60 * 1000)
-                val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-                
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-                } else {
-                    alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-                }
-                Log.d("AlarmService", "Snoozed alarm $alarmId for $snoozeTimeMinutes minutes")
             }
+        } else {
+            stopSelf()
         }
     }
 
@@ -309,6 +335,7 @@ class AlarmService : Service() {
         mediaPlayer?.release()
         mediaPlayer = null
         vibrator?.cancel()
+        serviceScope.cancel()
         super.onDestroy()
     }
 
