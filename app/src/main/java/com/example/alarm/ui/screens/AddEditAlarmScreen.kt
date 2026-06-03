@@ -41,6 +41,7 @@ import com.example.ui.theme.*
 fun AddEditAlarmScreen(
     viewModel: AlarmViewModel,
     alarmId: Int?, // if null, adding. if non-null, editing.
+    alarmType: String?, // New parameter
     onNavigateBack: () -> Unit
 ) {
     val editingState by viewModel.editingAlarm.collectAsState()
@@ -65,7 +66,7 @@ fun AddEditAlarmScreen(
                 // else: list not loaded yet — wait for the next emission.
             }
         } else if (viewModel.editingAlarm.value == null) {
-            viewModel.startNewAlarmScratchpad("CUSTOM")
+            viewModel.startNewAlarmScratchpad(alarmType ?: "CUSTOM")
         }
     }
 
@@ -155,7 +156,7 @@ fun AddEditAlarmScreen(
                         Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
                     }
                     Spacer(modifier = Modifier.width(16.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = label,
                             fontWeight = FontWeight.Bold,
@@ -168,6 +169,19 @@ fun AddEditAlarmScreen(
                             color = SleekMutedText
                         )
                     }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Switch(
+                        checked = alarm.active,
+                        onCheckedChange = { active ->
+                            viewModel.editingAlarm.value = alarm.copy(active = active)
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = SleekPrimary,
+                            uncheckedThumbColor = Color.Gray,
+                            uncheckedTrackColor = SleekBorder
+                        )
+                    )
                 }
             }
 

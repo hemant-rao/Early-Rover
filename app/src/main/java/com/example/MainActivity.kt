@@ -62,6 +62,21 @@ class MainActivity : ComponentActivity() {
             val darkTheme by viewModel.darkThemeEnabled.collectAsState()
             val switching by viewModel.isSwitchingLanguage.collectAsState()
 
+            // Request location permissions at startup
+            val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+                contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+            ) { permissions ->
+                if (permissions[android.Manifest.permission.ACCESS_FINE_LOCATION] == true || permissions[android.Manifest.permission.ACCESS_COARSE_LOCATION] == true) {
+                    viewModel.triggerAutoLocationDetect()
+                }
+            }
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                permissionLauncher.launch(arrayOf(
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                ))
+            }
+
             // While the activity recreates for a language switch, keep a loader on top long
             // enough to cover the native black gap, then clear the flag so it disappears.
             LaunchedEffect(switching) {
@@ -132,8 +147,7 @@ class MainActivity : ComponentActivity() {
                                 requestedTab = destinationToTab(pendingNavDestination.value),
                                 onTabConsumed = { pendingNavDestination.value = null },
                                 onNavigateToAddAlarm = { type ->
-                                    viewModel.startNewAlarmScratchpad(type)
-                                    navController.navigate("add_edit_alarm")
+                                    navController.navigate("add_edit_alarm?type=$type")
                                 },
                                 onNavigateToEditAlarm = { id ->
                                     navController.navigate("add_edit_alarm?id=$id")
@@ -158,20 +172,26 @@ class MainActivity : ComponentActivity() {
                         }
 
                         composable(
-                            route = "add_edit_alarm?id={id}",
+                            route = "add_edit_alarm?id={id}&type={type}",
                             arguments = listOf(
                                 navArgument("id") {
+                                    type = NavType.StringType
+                                    nullable = true
+                                    defaultValue = null
+                                },
+                                navArgument("type") {
                                     type = NavType.StringType
                                     nullable = true
                                     defaultValue = null
                                 }
                             )
                         ) { backStackEntry ->
-                            val idString = backStackEntry.arguments?.getString("id")
-                            val id = idString?.toIntOrNull()
+                            val id = backStackEntry.arguments?.getString("id")?.toIntOrNull()
+                            val type = backStackEntry.arguments?.getString("type")
                             AddEditAlarmScreen(
                                 viewModel = viewModel,
                                 alarmId = id,
+                                alarmType = type,
                                 onNavigateBack = { navController.navigateUp() }
                             )
                         }

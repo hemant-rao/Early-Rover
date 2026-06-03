@@ -14,6 +14,9 @@ interface AlarmDao {
     @Query("SELECT * FROM alarms WHERE active = 1")
     suspend fun getActiveAlarms(): List<Alarm>
 
+    @Query("SELECT * FROM alarms WHERE active = 1 AND locationName = :locationName")
+    suspend fun getActiveAlarmsForLocation(locationName: String): List<Alarm>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAlarm(alarm: Alarm): Long
 

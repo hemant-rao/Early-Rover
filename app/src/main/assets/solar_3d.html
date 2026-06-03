@@ -481,11 +481,16 @@
         }
 
         function animate() {
-            if (!isLoopRunning || !threeJsLoaded) return;
-
-            animationFrameId = requestAnimationFrame(animate);
+            // Persistent loop check: ensure we always request another frame
+            if (isLoopRunning && threeJsLoaded) {
+                animationFrameId = requestAnimationFrame(animate);
+            } else {
+                // If stopped, just exit (but this function shouldn't even be called if !isLoopRunning)
+                return;
+            }
 
             if (clock) {
+
                 uTime += clock.getDelta();
             } else {
                 uTime += 0.016;

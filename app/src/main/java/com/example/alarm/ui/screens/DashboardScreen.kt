@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -84,7 +85,7 @@ fun DashboardScreen(
     requestedTab: Int? = null,
     onTabConsumed: () -> Unit = {}
 ) {
-    val alarms by viewModel.allAlarms.collectAsStateWithLifecycle()
+    val alarms by viewModel.alarmsForCurrentLocation.collectAsStateWithLifecycle()
     val nextAlarm by viewModel.nextUpcomingAlarm.collectAsStateWithLifecycle()
     val nextAlarmFormatted by viewModel.nextUpcomingAlarmTimeFormatted.collectAsStateWithLifecycle()
     
@@ -97,6 +98,7 @@ fun DashboardScreen(
     val weather by viewModel.weather.collectAsStateWithLifecycle()
     val savedCities by viewModel.savedCities.collectAsStateWithLifecycle()
     val tzOffset by viewModel.timezoneOffset.collectAsStateWithLifecycle()
+    val isDetectingLocation by viewModel.isDetectingLocation.collectAsStateWithLifecycle()
     val headerScope = rememberCoroutineScope()
 
     val formattedDate = remember {
@@ -109,11 +111,13 @@ fun DashboardScreen(
     var activeTab by remember { mutableIntStateOf(0) }
 
     val activeCityIndex = remember(savedCities, locationName) {
-        savedCities.indexOfFirst { c ->
-            locationName.equals(c.name, true) ||
+        val exactMatch = savedCities.indexOfFirst { it.name.equals(locationName, true) }
+        if (exactMatch != -1) exactMatch else {
+            savedCities.indexOfFirst { c ->
                 locationName.startsWith(c.name, true) ||
-                c.name.startsWith(locationName, true)
-        }.coerceAtLeast(0)
+                    c.name.startsWith(locationName, true)
+            }.coerceAtLeast(0)
+        }
     }
     val pagerState = rememberPagerState(initialPage = activeCityIndex) { savedCities.size }
     var totalDragAmount by remember { mutableStateOf(0f) }
@@ -427,6 +431,7 @@ fun DashboardScreen(
                                 // Interactive location header: active name (swipeable) + saved-location
                                 // dots + an add (+) button. Swiping or tapping a dot switches location.
                                 LocationHeader(
+                                    isDetecting = isDetectingLocation,
                                     savedCities = savedCities,
                                     locationName = locationName,
                                     activeCityIndex = activeCityIndex,
@@ -460,7 +465,11 @@ fun DashboardScreen(
                                             )
                                     )
 
-                                    if (!showLocationSearchDialog) {
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = !showLocationSearchDialog,
+                                        enter = fadeIn(),
+                                        exit = fadeOut()
+                                    ) {
                                         Celestial3DView(
                                             modifier = Modifier.fillMaxSize(),
                                             sunriseTime = sunrise,
@@ -476,29 +485,63 @@ fun DashboardScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(top = 8.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .padding(vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    SunCaption(
-                                        label = viewModel.translate("SUNRISE"),
-                                        value = String.format("%02d:%02d %s", if (sunrise.hour % 12 == 0) 12 else sunrise.hour % 12, sunrise.minute, if (sunrise.hour >= 12) "PM" else "AM"),
+                                    val sunriseAlarm = alarms.find { it.alarmType == "SUNRISE" }
+                                    val sunsetAlarm = alarms.find { it.alarmType == "SUNSET" }
+
+                                    SunriseSunsetAlarmCard(
+                                        modifier = Modifier.weight(1f),
+                                        title = viewModel.translate("Sunrise"),
+                                        time = String.format("%02d:%02d %s", if (sunrise.hour % 12 == 0) 12 else sunrise.hour % 12, sunrise.minute, if (sunrise.hour >= 12) "PM" else "AM"),
                                         icon = Icons.Default.WbSunny,
-                                        tint = SleekSolarAccent
+                                        tint = SleekSolarAccent,
+                                        isActive = sunriseAlarm?.active ?: false,
+                                        currentOffset = sunriseAlarm?.offsetMinutes ?: 0,
+                                        onAlarmToggle = { active ->
+                                            if (sunriseAlarm == null) {
+                                                if (active) {
+                                                    viewModel.createDefaultAlarm("SUNRISE")
+                                                }
+                                            } else {
+                                                if (sunriseAlarm.active != active) {
+                                                    viewModel.toggleAlarmActive(sunriseAlarm)
+                                                }
+                                            }
+                                        },
+                                        onOffsetSelected = { offset ->
+                                            sunriseAlarm?.let {
+                                                viewModel.updateAlarmOffset(it, offset)
+                                            }
+                                        },
+                                        onCardClick = { sunriseAlarm?.let { onNavigateToEditAlarm(it.id) } ?: onNavigateToAddAlarm("SUNRISE") }
                                     )
-                                    Text(
-                                        text = "3D CELESTIAL ORBITS",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = SleekMutedText.copy(alpha = 0.7f),
-                                        letterSpacing = 1.2.sp
-                                    )
-                                    SunCaption(
-                                        label = viewModel.translate("SUNSET"),
-                                        value = String.format("%02d:%02d %s", if (sunset.hour % 12 == 0) 12 else sunset.hour % 12, sunset.minute, if (sunset.hour >= 12) "PM" else "AM"),
+                                    SunriseSunsetAlarmCard(
+                                        modifier = Modifier.weight(1f),
+                                        title = viewModel.translate("Sunset"),
+                                        time = String.format("%02d:%02d %s", if (sunset.hour % 12 == 0) 12 else sunset.hour % 12, sunset.minute, if (sunset.hour >= 12) "PM" else "AM"),
                                         icon = Icons.Default.WbTwilight,
                                         tint = SleekSecondary,
-                                        alignEnd = true
+                                        isActive = sunsetAlarm?.active ?: false,
+                                        currentOffset = sunsetAlarm?.offsetMinutes ?: 0,
+                                        onAlarmToggle = { active ->
+                                            if (sunsetAlarm == null) {
+                                                if (active) {
+                                                    viewModel.createDefaultAlarm("SUNSET")
+                                                }
+                                            } else {
+                                                if (sunsetAlarm.active != active) {
+                                                    viewModel.toggleAlarmActive(sunsetAlarm)
+                                                }
+                                            }
+                                        },
+                                        onOffsetSelected = { offset ->
+                                            sunsetAlarm?.let {
+                                                viewModel.updateAlarmOffset(it, offset)
+                                            }
+                                        },
+                                        onCardClick = { sunsetAlarm?.let { onNavigateToEditAlarm(it.id) } ?: onNavigateToAddAlarm("SUNSET") }
                                     )
                                 }
                             }
@@ -509,8 +552,21 @@ fun DashboardScreen(
                             Box(modifier = Modifier.fillMaxWidth()) {
                                 SleekWeatherSection(
                                     viewModel = viewModel,
-                                    onChangeLocationClick = { showLocationSearchDialog = true }
+                                    onChangeLocationClick = { showLocationSearchDialog = true },
+                                    showExtendedData = true
                                 )
+                            }
+                        }
+
+                        // ADD ALARM BUTTON
+                        item {
+                            Button(
+                                onClick = { onNavigateToAddAlarm("CUSTOM") },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 16.dp),
+                            ) {
+                                Text(viewModel.translate("Add Standard Alarm"))
                             }
                         }
 
@@ -605,65 +661,7 @@ fun DashboardScreen(
 
                         // 4. SOLAR DETAILS / BOTTOM ACCENTS CARD (TWO BLOCKS SIDE-BY-SIDE)
                         item {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
-                            ) {
-                                Card(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(20.dp)),
-                                    shape = RoundedCornerShape(20.dp),
-                                    colors = CardDefaults.cardColors(containerColor = SleekCardBg)
-                                ) {
-                                    Column(modifier = Modifier.padding(16.dp)) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                        ) {
-                                            Box(modifier = Modifier.size(8.dp).background(SleekSolarAccent, CircleShape))
-                                            Text("SOLAR", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SleekMutedText, letterSpacing = 1.sp)
-                                        }
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        val activeOffsetStr = if (nextAlarm != null && nextAlarm!!.alarmType != "CUSTOM") {
-                                            val min = nextAlarm!!.offsetMinutes
-                                            if (min == 0) "At Peak Event" else if (min < 0) "${-min}m Before" else "${min}m After"
-                                        } else {
-                                            "Dynamic Time"
-                                        }
-                                        val activeOffsetSub = if (nextAlarm != null && nextAlarm!!.alarmType != "CUSTOM") {
-                                            if (nextAlarm!!.alarmType == "SUNRISE") "Before Sunrise" else "Before Sunset"
-                                        } else {
-                                            "Standard triggers"
-                                        }
-                                        Text(text = activeOffsetStr, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = SleekActiveText)
-                                        Text(text = activeOffsetSub, fontSize = 10.sp, color = SleekMutedText, modifier = Modifier.padding(top = 2.dp))
-                                    }
-                                }
-
-                                Card(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(20.dp)),
-                                    shape = RoundedCornerShape(20.dp),
-                                    colors = CardDefaults.cardColors(containerColor = SleekCardBg)
-                                ) {
-                                    Column(modifier = Modifier.padding(16.dp)) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                        ) {
-                                            Box(modifier = Modifier.size(8.dp).background(SleekSecondary, CircleShape))
-                                            Text("VIBE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SleekMutedText, letterSpacing = 1.sp)
-                                        }
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        val vibeStr = if (nextAlarm?.vibrationEnabled == true) "Vibration ON" else "Vibration OFF"
-                                        val vibeSub = if (nextAlarm?.snoozeEnabled == true) "Snooze ${nextAlarm?.snoozeMinutes}m Enabled" else "Instant Wakeup"
-                                        Text(text = vibeStr, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = SleekActiveText)
-                                        Text(text = vibeSub, fontSize = 10.sp, color = SleekMutedText, modifier = Modifier.padding(top = 2.dp))
-                                    }
-                                }
-                            }
+                            Spacer(modifier = Modifier.height(24.dp))
                         }
 
                         // 5. ALARM SCHEDULE TIMELINE LIST HEADER
@@ -756,6 +754,7 @@ fun DashboardScreen(
                     ) {
                         item {
                             LocationHeader(
+                                isDetecting = isDetectingLocation,
                                 savedCities = savedCities,
                                 locationName = locationName,
                                 activeCityIndex = activeCityIndex,
@@ -771,7 +770,8 @@ fun DashboardScreen(
                             SleekWeatherSection(
                                 viewModel = viewModel,
                                 modifier = Modifier.fillMaxWidth(),
-                                onChangeLocationClick = { showLocationSearchDialog = true }
+                                onChangeLocationClick = { showLocationSearchDialog = true },
+                                showExtendedData = true
                             )
                         }
                     }
@@ -1397,7 +1397,8 @@ fun LocationSearchDialog(
 fun SleekWeatherSection(
     viewModel: AlarmViewModel,
     modifier: Modifier = Modifier,
-    onChangeLocationClick: () -> Unit
+    onChangeLocationClick: () -> Unit,
+    showExtendedData: Boolean = false
 ) {
     val lang = viewModel.currentLanguage.collectAsStateWithLifecycle().value
     val detailedWeather by viewModel.detailedWeather.collectAsStateWithLifecycle()
@@ -1629,79 +1630,40 @@ fun SleekWeatherSection(
                         }
                         
                         Spacer(modifier = Modifier.height(24.dp))
-                        
-                        // FORECAST
-                        var isForecastExpanded by remember { mutableStateOf(false) }
-                        var isHistoryExpanded by remember { mutableStateOf(false) }
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { isForecastExpanded = !isForecastExpanded }
-                                .padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = translateWeatherText("FORECAST (NEXT 10 DAYS)", lang),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SleekSecondary,
-                                letterSpacing = 0.5.sp
-                            )
-                            Icon(
-                                imageVector = if (isForecastExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                contentDescription = null,
-                                tint = SleekSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-
-                        if (isForecastExpanded) {
-                            val forecastDaysList = weather.dailyList.filter {
-                                try {
-                                    val d = LocalDate.parse(it.dateIso)
-                                    !d.isBefore(LocalDate.now())
-                                } catch(e: Exception) { true }
-                            }.take(10)
-                            WeatherDaysList(weather, forecastDaysList, expandedDayIso, { expandedDayIso = it }, lang)
-                        }
 
                         HorizontalDivider(color = SleekBorder.copy(alpha = 0.3f), modifier = Modifier.padding(vertical = 8.dp))
 
-                        // HISTORY
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { isHistoryExpanded = !isHistoryExpanded }
-                                .padding(vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = translateWeatherText("HISTORY (LAST 10 DAYS)", lang),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = SleekSecondary,
-                                letterSpacing = 0.5.sp
-                            )
-                            Icon(
-                                imageVector = if (isHistoryExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                contentDescription = null,
-                                tint = SleekSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
+                        if (showExtendedData) {
+                            var isForecastExpanded by remember { mutableStateOf(false) }
+                            var isHistoryExpanded by remember { mutableStateOf(false) }
+                            
+                            // Forecast
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable { isForecastExpanded = !isForecastExpanded }.padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(translateWeatherText("FORECAST", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SleekSecondary)
+                                Icon(if (isForecastExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null, tint = SleekSecondary)
+                            }
+                            if (isForecastExpanded) {
+                                WeatherDaysList(weather, weather.dailyList.takeLast(10), expandedDayIso, { expandedDayIso = it }, lang)
+                            }
+                            
+                            // History
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clickable { isHistoryExpanded = !isHistoryExpanded }.padding(vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(translateWeatherText("HISTORY", lang), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SleekSecondary)
+                                Icon(if (isHistoryExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, null, tint = SleekSecondary)
+                            }
+                            if (isHistoryExpanded) {
+                                WeatherDaysList(weather, weather.dailyList.take(5), expandedDayIso, { expandedDayIso = it }, lang)
+                            }
                         }
 
-                        if (isHistoryExpanded) {
-                            val historyDaysList = weather.dailyList.filter {
-                                try {
-                                    val d = LocalDate.parse(it.dateIso)
-                                    d.isBefore(LocalDate.now())
-                                } catch(e: Exception) { false }
-                            }.takeLast(10)
-                            WeatherDaysList(weather, historyDaysList, expandedDayIso, { expandedDayIso = it }, lang)
-                        }
                     }
                 }
             }
@@ -2002,9 +1964,7 @@ fun LocationCarouselSection(
             modifier = Modifier.fillMaxWidth()
         ) {
             items(savedCities) { city ->
-                val isActive = currentLocationName.equals(city.name, true) ||
-                    currentLocationName.startsWith(city.name, true) ||
-                    city.name.startsWith(currentLocationName, true)
+                val isActive = currentLocationName.equals(city.name, true)
                 
                 val simulatedTemp = when (city.name.lowercase()) {
                     "new york" -> "19°"

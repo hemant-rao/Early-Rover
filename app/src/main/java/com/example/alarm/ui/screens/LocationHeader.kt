@@ -34,6 +34,7 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun LocationHeader(
+    isDetecting: Boolean,
     savedCities: List<CityInfo>,
     locationName: String,
     activeCityIndex: Int,
@@ -43,7 +44,13 @@ fun LocationHeader(
     onAddLocationClick: () -> Unit,
     onManageCitiesClick: () -> Unit
 ) {
-    if (savedCities.isEmpty()) {
+    if (isDetecting) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.LocationOn, null, tint = SleekSecondary, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text("Detecting location...", style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, color = SleekActiveText), modifier = Modifier.weight(1f))
+        }
+    } else if (savedCities.isEmpty()) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
@@ -87,12 +94,9 @@ fun LocationHeader(
         }
         LaunchedEffect(pagerState, savedCities) {
             snapshotFlow { pagerState.currentPage }
-                .drop(1)
                 .collect { page ->
                     val c = savedCities.getOrNull(page) ?: return@collect
-                    val matches = locationName.equals(c.name, true) ||
-                        locationName.startsWith(c.name, true) ||
-                        c.name.startsWith(locationName, true)
+                    val matches = locationName.equals(c.name, true)
                     if (!matches) viewModel.setManualCitySelection(c)
                 }
         }
@@ -137,7 +141,7 @@ fun LocationHeader(
                             .size(if (selected) 8.dp else 6.dp)
                             .background(
                                 if (selected) SleekPrimary
-                                else SleekMutedText.copy(alpha = 0.4f),
+                                else SleekMutedText.copy(alpha = 0.2f),
                                 CircleShape
                             )
                             .clickable {
@@ -147,17 +151,6 @@ fun LocationHeader(
                 }
 
                 IconButton(
-                    onClick = onManageCitiesClick,
-                    modifier = Modifier.size(28.dp).testTag("manage_cities_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.MoreVert,
-                        contentDescription = "Manage Cities",
-                        tint = SleekMutedText,
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-                IconButton(
                     onClick = onAddLocationClick,
                     modifier = Modifier.size(28.dp).testTag("add_location_header_button")
                 ) {
@@ -165,6 +158,17 @@ fun LocationHeader(
                         imageVector = Icons.Default.AddCircle,
                         contentDescription = "Add New Location",
                         tint = SleekPrimary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onManageCitiesClick,
+                    modifier = Modifier.size(28.dp).testTag("manage_cities_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "Manage Cities",
+                        tint = SleekMutedText,
                         modifier = Modifier.size(24.dp)
                     )
                 }

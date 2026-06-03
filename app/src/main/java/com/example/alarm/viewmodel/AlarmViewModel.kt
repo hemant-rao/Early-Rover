@@ -44,6 +44,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     val allAlarms: StateFlow<List<Alarm>> = repository.allAlarms
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+
     private val _latitude = MutableStateFlow(locationHelper.getSavedLatitude())
     val latitude: StateFlow<Double> = _latitude.asStateFlow()
 
@@ -52,6 +53,13 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _locationName = MutableStateFlow(locationHelper.getSavedLocationName())
     val locationName: StateFlow<String> = _locationName.asStateFlow()
+
+    val alarmsForCurrentLocation: StateFlow<List<Alarm>> = combine(
+        repository.allAlarms,
+        _locationName
+    ) { alarms, locationName ->
+        alarms.filter { it.locationName == locationName }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _timezoneOffset = MutableStateFlow(locationHelper.getSavedTimezoneOffset())
     val timezoneOffset: StateFlow<Double> = _timezoneOffset.asStateFlow()
@@ -78,6 +86,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isWeatherLoading = MutableStateFlow(false)
     val isWeatherLoading: StateFlow<Boolean> = _isWeatherLoading.asStateFlow()
+
+    private val _isDetectingLocation = MutableStateFlow(false)
+    val isDetectingLocation: StateFlow<Boolean> = _isDetectingLocation.asStateFlow()
 
     // Upcoming Hero alarm info
     private val _nextUpcomingAlarm = MutableStateFlow<Alarm?>(null)
@@ -246,24 +257,12 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     val travelCurrentSpeed = TravelTrackingService.currentSpeedKmh
 
     init {
-        recomputeSunTimes()
-        observeAlarmsForUpcoming()
-
-        // Auto-stop travel tracking service if there are no travel alarms remaining
-        viewModelScope.launch {
-            allTravelAlarms.collect { list ->
-                if (list.isEmpty() && isTravelTrackingActive.value) {
-                    stopTravelTracking()
-                }
-            }
-        }
-
-        // Initialize saved location cities database
+        // Initialize saved location cities database FIRST so recomputeSunTimes can rely on exact city coordinates
         val savedStr = settingsPrefs.getString("saved_cities_list", "") ?: ""
         if (savedStr.isEmpty()) {
             val defaultCity = CityInfo(
-                locationHelper.getSavedLocationName().ifEmpty { "New York" },
-                "United States",
+                "Detecting Location...",
+                "...",
                 locationHelper.getSavedLatitude(),
                 locationHelper.getSavedLongitude(),
                 locationHelper.getSavedTimezoneOffset()
@@ -290,6 +289,22 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             _savedCities.value = list
+        }
+
+        recomputeSunTimes()
+        observeAlarmsForUpcoming()
+
+        // Auto-stop travel tracking service if there are no travel alarms remaining
+        viewModelScope.launch {
+            allTravelAlarms.collect { list ->
+                if (list.isEmpty() && isTravelTrackingActive.value) {
+                    stopTravelTracking()
+                }
+            }
+        }
+
+        if (savedStr.isEmpty()) {
+            triggerAutoLocationDetect()
         }
     }
 
@@ -388,16 +403,51 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             val list = repository.getActiveAlarms()
             for (alarm in list) {
                 var updatedAlarm = alarm
-                if (alarm.alarmType == "SUNRISE") {
-                    val targetLocalTime = _sunriseTime.value.plusMinutes(alarm.offsetMinutes.toLong())
-                    updatedAlarm = alarm.copy(hour = targetLocalTime.hour, minute = targetLocalTime.minute)
-                    repository.updateAlarm(updatedAlarm)
-                } else if (alarm.alarmType == "SUNSET") {
-                    val targetLocalTime = _sunsetTime.value.plusMinutes(alarm.offsetMinutes.toLong())
+                if (alarm.alarmType == "SUNRISE" || alarm.alarmType == "SUNSET") {
+                    val city = _savedCities.value.find { it.name.equals(alarm.locationName, true) }
+                    val (lat, lng, offset) = if (city != null) {
+                        Triple(city.latitude, city.longitude, city.timezoneOffset)
+                    } else {
+                        Triple(_latitude.value, _longitude.value, _timezoneOffset.value)
+                    }
+                    
+                    val times = SunCalculator.calculateSunTimes(lat, lng, LocalDate.now(), offset)
+                    val baseTime = if (alarm.alarmType == "SUNRISE") {
+                        times.sunrise ?: LocalTime.of(6, 0)
+                    } else {
+                        times.sunset ?: LocalTime.of(18, 0)
+                    }
+                    val targetLocalTime = baseTime.plusMinutes(alarm.offsetMinutes.toLong())
                     updatedAlarm = alarm.copy(hour = targetLocalTime.hour, minute = targetLocalTime.minute)
                     repository.updateAlarm(updatedAlarm)
                 }
                 scheduler.schedule(updatedAlarm)
+            }
+        }
+    }
+
+    fun updateAlarmOffset(alarm: Alarm, offset: Int) {
+        viewModelScope.launch {
+            var updated = alarm.copy(offsetMinutes = offset)
+            if (alarm.alarmType == "SUNRISE" || alarm.alarmType == "SUNSET") {
+                val city = _savedCities.value.find { it.name.equals(alarm.locationName, true) }
+                val (lat, lng, tzOffset) = if (city != null) {
+                    Triple(city.latitude, city.longitude, city.timezoneOffset)
+                } else {
+                    Triple(_latitude.value, _longitude.value, _timezoneOffset.value)
+                }
+                val times = SunCalculator.calculateSunTimes(lat, lng, LocalDate.now(), tzOffset)
+                val baseTime = if (alarm.alarmType == "SUNRISE") {
+                    times.sunrise ?: LocalTime.of(6, 0)
+                } else {
+                    times.sunset ?: LocalTime.of(18, 0)
+                }
+                val targetLocalTime = baseTime.plusMinutes(offset.toLong())
+                updated = updated.copy(hour = targetLocalTime.hour, minute = targetLocalTime.minute)
+            }
+            repository.updateAlarm(updated)
+            if (updated.active) {
+                scheduler.schedule(updated)
             }
         }
     }
@@ -459,6 +509,24 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    fun createDefaultAlarm(type: String) {
+        val base = if (type == "SUNRISE") _sunriseTime.value else _sunsetTime.value
+        val alarm = Alarm(
+            title = if (type == "SUNRISE") "Sunrise Alarm" else "Sunset Alarm",
+            alarmType = type,
+            hour = base.hour,
+            minute = base.minute,
+            offsetMinutes = 0,
+            snoozeMinutes = _defaultSnoozeMinutes.value,
+            active = true,
+            locationName = _locationName.value
+        )
+        viewModelScope.launch {
+            repository.insertAlarm(alarm)
+            scheduler.schedule(alarm)
+        }
+    }
+
     fun saveEditingAlarm() {
         val alarm = editingAlarm.value ?: return
         viewModelScope.launch {
@@ -470,8 +538,11 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 finalAlarm = alarm.copy(hour = targetLocalTime.hour, minute = targetLocalTime.minute)
             } else if (alarm.alarmType == "SUNSET") {
                 val targetLocalTime = _sunsetTime.value.plusMinutes(alarm.offsetMinutes.toLong())
-                finalAlarm = alarm.copy(hour = targetLocalTime.hour, minute = targetLocalTime.minute)
+                finalAlarm = alarm.copy(hour = targetLocalTime.hour, minute = targetLocalTime.minute, locationName = _locationName.value)
             }
+            
+            // Ensure locationName is set even for CUSTOM alarms
+            finalAlarm = finalAlarm.copy(locationName = _locationName.value)
 
             val savedId = repository.insertAlarm(finalAlarm)
             val schedulerTarget = finalAlarm.copy(id = savedId.toInt())
@@ -507,16 +578,35 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     fun isAutoLocationEnabled(): Boolean = locationHelper.isAutoDetectEnabled()
 
     fun triggerAutoLocationDetect() {
+        _isDetectingLocation.value = true
         locationHelper.setAutoDetect(true)
         locationHelper.requestCurrentLocation(
             onSuccess = { lat, lng, offset, name ->
+                _isDetectingLocation.value = false
                 _latitude.value = lat
                 _longitude.value = lng
                 _timezoneOffset.value = offset
                 _locationName.value = name
                 recomputeSunTimes() // recomputeSunTimes() already refreshes weather for the new coordinates
+                
+                // Add to saved cities
+                val current = _savedCities.value.toMutableList()
+                val newCity = CityInfo(name, "Detected", lat, lng, offset)
+                
+                // Only add if not already present
+                val existingIndex = current.indexOfFirst { it.name == name || (Math.abs(it.latitude - lat) < 0.01 && Math.abs(it.longitude - lng) < 0.01) }
+                if (existingIndex != -1) {
+                    current[existingIndex] = newCity
+                } else {
+                    val index = current.indexOfFirst { it.name == "Detecting Location..." }
+                    if (index != -1) current[index] = newCity
+                    else current.add(0, newCity)
+                }
+                _savedCities.value = current
+                saveCitiesToPrefs(current)
             },
             onFailure = { e ->
+                _isDetectingLocation.value = false
                 Log.e("AlarmViewModel", "Failed to detect automatic GPS location", e)
             }
         )
@@ -590,7 +680,8 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteSavedCity(city: CityInfo) {
         val current = _savedCities.value.toMutableList()
-        current.removeAll { it.name.lowercase() == city.name.lowercase() }
+        // Remove only the first exact match
+        current.remove(city)
         
         // Ensure at least one city remains
         if (current.isEmpty()) {

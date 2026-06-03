@@ -19,6 +19,7 @@ data class Alarm(
     val volume: Int = 80,
     val ringtoneUri: String = "", // empty for default alarm sound
     val ringAtExactAlso: Boolean = false,
+    val locationName: String = "", // added for location binding
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {

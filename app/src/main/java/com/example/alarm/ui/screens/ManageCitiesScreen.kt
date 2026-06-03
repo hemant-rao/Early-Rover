@@ -28,7 +28,6 @@ fun ManageCitiesScreen(
     onNavigateBack: () -> Unit
 ) {
     val savedCities by viewModel.savedCities.collectAsState()
-    var selectedIndices by remember { mutableStateOf(setOf<Int>()) }
 
     Scaffold(
         topBar = {
@@ -40,28 +39,6 @@ fun ManageCitiesScreen(
                     }
                 }
             )
-        },
-        bottomBar = {
-            if (selectedIndices.isNotEmpty()) {
-                Button(
-                    onClick = {
-                        selectedIndices.forEach { index ->
-                            if (index in savedCities.indices) {
-                                viewModel.deleteSavedCity(savedCities[index])
-                            }
-                        }
-                        selectedIndices = emptySet()
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Icon(Icons.Default.Delete, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Delete Selected")
-                }
-            }
         }
     ) { padding ->
         LazyColumn(
@@ -72,21 +49,13 @@ fun ManageCitiesScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             itemsIndexed(savedCities) { index, city ->
-                val isSelected = selectedIndices.contains(index)
                 val isCurrentLocation = index == 0 // Assuming index 0 is current location
 
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable {
-                            if (!isCurrentLocation) {
-                                if (isSelected) selectedIndices -= index
-                                else selectedIndices += index
-                            }
-                        }
-                        .background(if (isSelected) SleekPrimary.copy(alpha = 0.2f) else SleekCardBg),
-                    border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, SleekPrimary) else null
+                        .background(SleekCardBg),
                 ) {
                     Row(
                         modifier = Modifier.padding(16.dp),
@@ -98,6 +67,10 @@ fun ManageCitiesScreen(
                         }
                         if (isCurrentLocation) {
                             Text("Current", fontSize = 12.sp, color = SleekPrimary)
+                        } else {
+                            IconButton(onClick = { viewModel.deleteSavedCity(city) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete City", tint = MaterialTheme.colorScheme.error)
+                            }
                         }
                     }
                 }
