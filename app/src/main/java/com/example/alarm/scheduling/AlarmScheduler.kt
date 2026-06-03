@@ -7,6 +7,9 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import com.example.alarm.data.Alarm
+import com.example.alarm.data.SunAlarmResolver
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Calendar
 
 class AlarmScheduler(private val context: Context) {
@@ -132,53 +135,14 @@ class AlarmScheduler(private val context: Context) {
     }
 
     companion object {
+        /**
+         * Next fire time as a [Calendar]. The actual timezone-aware logic lives in the pure,
+         * unit-testable [SunAlarmResolver.nextTriggerInstant]; this only adapts it to the device
+         * clock ("now") and the [Calendar] the scheduling APIs expect.
+         */
         fun getNextOccurrence(alarm: Alarm): Calendar {
-            val now = Calendar.getInstance()
-            val target = Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, alarm.hour)
-                set(Calendar.MINUTE, alarm.minute)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-            }
-            
-            val repeatDays = alarm.getRepeatDaysList()
-            if (repeatDays.isEmpty()) {
-                if (target.timeInMillis <= now.timeInMillis) {
-                    target.add(Calendar.DAY_OF_YEAR, 1)
-                }
-                return target
-            }
-            
-            // Repeating alarm - find nearest upcoming day
-            var daysToAdd = 0
-            while (daysToAdd < 8) {
-                val testCal = Calendar.getInstance().apply {
-                    timeInMillis = target.timeInMillis
-                    add(Calendar.DAY_OF_YEAR, daysToAdd)
-                }
-                
-                val calDow = testCal.get(Calendar.DAY_OF_WEEK)
-                val ourDow = when (calDow) {
-                    Calendar.MONDAY -> 1
-                    Calendar.TUESDAY -> 2
-                    Calendar.WEDNESDAY -> 3
-                    Calendar.THURSDAY -> 4
-                    Calendar.FRIDAY -> 5
-                    Calendar.SATURDAY -> 6
-                    Calendar.SUNDAY -> 7
-                    else -> 1
-                }
-                
-                if (repeatDays.contains(ourDow)) {
-                    if (daysToAdd == 0 && testCal.timeInMillis <= now.timeInMillis) {
-                        // Today matches but target time already elapsed today
-                    } else {
-                        return testCal
-                    }
-                }
-                daysToAdd++
-            }
-            return target
+            val instant = SunAlarmResolver.nextTriggerInstant(alarm, Instant.now(), ZoneId.systemDefault())
+            return Calendar.getInstance().apply { timeInMillis = instant.toEpochMilli() }
         }
     }
 }

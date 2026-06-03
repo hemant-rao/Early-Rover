@@ -366,10 +366,23 @@ fun AddEditAlarmScreen(
                         
                         // Text summary representation — preview the ACTUAL fire time, i.e. the
                         // sun event + chosen offset (this mirrors how saveEditingAlarm computes it),
-                        // so picking an offset chip updates the shown time.
+                        // so picking an offset chip updates the shown time. When editing an alarm
+                        // already bound to another city, preview against THAT city (not the active one)
+                        // so the shown time matches what will actually be saved.
                         val previewBase = when (alarm.alarmType) {
-                            "SUNRISE" -> sunriseTime.plusMinutes(alarm.offsetMinutes.toLong())
-                            "SUNSET" -> sunsetTime.plusMinutes(alarm.offsetMinutes.toLong())
+                            "SUNRISE", "SUNSET" -> if (alarm.hasLocation()) {
+                                com.example.alarm.data.SunAlarmResolver.targetTime(
+                                    alarm.alarmType,
+                                    com.example.alarm.data.SunAlarmResolver.Location(
+                                        alarm.latitude, alarm.longitude, alarm.timezoneOffset, alarm.locationName
+                                    ),
+                                    java.time.LocalDate.now(),
+                                    alarm.offsetMinutes
+                                )
+                            } else {
+                                val event = if (alarm.alarmType == "SUNRISE") sunriseTime else sunsetTime
+                                event.plusMinutes(alarm.offsetMinutes.toLong())
+                            }
                             else -> java.time.LocalTime.of(alarm.hour.coerceIn(0, 23), alarm.minute.coerceIn(0, 59))
                         }
                         val hour12 = if (previewBase.hour % 12 == 0) 12 else previewBase.hour % 12

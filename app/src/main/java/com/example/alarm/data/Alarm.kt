@@ -19,11 +19,21 @@ data class Alarm(
     val volume: Int = 80,
     val ringtoneUri: String = "", // empty for default alarm sound
     val ringAtExactAlso: Boolean = false,
-    val locationName: String = "", // added for location binding
+    // Location this SUNRISE/SUNSET alarm belongs to. Each alarm is self-contained: its hour/minute
+    // are always derived from THESE coordinates, never from whatever location is currently active.
+    // This is what keeps each city's sun-alarm independent (switching cities can't overwrite it).
+    // Unused for CUSTOM alarms. (0.0/0.0/"" = legacy alarm created before per-location binding.)
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
+    val timezoneOffset: Double = 0.0,
+    val locationName: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {
     fun isRepeating(): Boolean = repeatDays.isNotEmpty()
+
+    /** A sun-based alarm whose location was never recorded (created before per-location binding). */
+    fun hasLocation(): Boolean = !(latitude == 0.0 && longitude == 0.0 && locationName.isEmpty())
     
     fun getRepeatDaysList(): List<Int> {
         if (repeatDays.isEmpty()) return emptyList()

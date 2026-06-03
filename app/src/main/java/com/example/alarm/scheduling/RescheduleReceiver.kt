@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.example.alarm.data.AppDatabase
+import com.example.alarm.data.SunAlarmResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -26,7 +27,23 @@ class RescheduleReceiver : BroadcastReceiver() {
                 try {
                     val activeAlarms = database.alarmDao().getActiveAlarms()
                     for (alarm in activeAlarms) {
-                        scheduler.schedule(alarm)
+                        // Recompute SUNRISE/SUNSET alarms against each alarm's OWN stored location so a
+                        // boot/timezone change (e.g. while travelling) still fires each one at its own
+                        // city's sun time. A bound alarm uses its own location; one without a recorded
+                        // location is left as-is (no active location is available in this receiver).
+                        val updated = if (alarm.hasLocation()) {
+                            // fallback is unused here: hasLocation() == true means recalibrate uses the
+                            // alarm's own coordinates. Pass its own location to satisfy the signature.
+                            val own = SunAlarmResolver.Location(
+                                alarm.latitude, alarm.longitude, alarm.timezoneOffset, alarm.locationName
+                            )
+                            // No date passed: calibrate against "today" in the alarm's own timezone.
+                            SunAlarmResolver.recalibrate(alarm, own)
+                        } else {
+                            alarm
+                        }
+                        if (updated !== alarm) database.alarmDao().updateAlarm(updated)
+                        scheduler.schedule(updated)
                     }
                     Log.d("RescheduleReceiver", "Successfully re-calibrated ${activeAlarms.size} active alarms.")
                 } catch (e: Exception) {

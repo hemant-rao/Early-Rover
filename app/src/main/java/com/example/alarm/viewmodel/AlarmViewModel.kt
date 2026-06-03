@@ -10,6 +10,7 @@ import com.example.alarm.SunCalculator
 import com.example.alarm.data.Alarm
 import com.example.alarm.data.AlarmRepository
 import com.example.alarm.data.AppDatabase
+import com.example.alarm.data.SunAlarmResolver
 import com.example.alarm.location.CityInfo
 import com.example.alarm.location.LocationHelper
 import com.example.alarm.data.TravelAlarm
@@ -398,59 +399,47 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Recomputes the clock time of every active SUNRISE/SUNSET alarm and (re)schedules it.
+     *
+     * Each sun-alarm is resolved against ITS OWN stored coordinates — never the currently active
+     * location. That is the whole point of the per-location binding: switching the active city only
+     * changes the dashboard/weather, it can no longer rewrite another city's alarm. Two cities =>
+     * two independent alarms, each firing at its own local sunrise/sunset.
+     *
+     * Legacy alarms (created before the binding existed, [Alarm.hasLocation] == false) are backfilled
+     * once with the active location so they keep working after the upgrade.
+     */
     fun recalculateAndScheduleActiveAlarms() {
         viewModelScope.launch(Dispatchers.IO) {
             val list = repository.getActiveAlarms()
+            val activeLocation = currentActiveLocation()
             for (alarm in list) {
-                var updatedAlarm = alarm
-                if (alarm.alarmType == "SUNRISE" || alarm.alarmType == "SUNSET") {
-                    val city = _savedCities.value.find { it.name.equals(alarm.locationName, true) }
-                    val (lat, lng, offset) = if (city != null) {
-                        Triple(city.latitude, city.longitude, city.timezoneOffset)
-                    } else {
-                        Triple(_latitude.value, _longitude.value, _timezoneOffset.value)
-                    }
-                    
-                    val times = SunCalculator.calculateSunTimes(lat, lng, LocalDate.now(), offset)
-                    val baseTime = if (alarm.alarmType == "SUNRISE") {
-                        times.sunrise ?: LocalTime.of(6, 0)
-                    } else {
-                        times.sunset ?: LocalTime.of(18, 0)
-                    }
-                    val targetLocalTime = baseTime.plusMinutes(alarm.offsetMinutes.toLong())
-                    updatedAlarm = alarm.copy(hour = targetLocalTime.hour, minute = targetLocalTime.minute)
-                    repository.updateAlarm(updatedAlarm)
-                }
+                // No date passed: each sun-alarm calibrates against "today" in its OWN city's timezone.
+                val updatedAlarm = SunAlarmResolver.recalibrate(alarm, activeLocation)
+                // Persist only sun-alarms (recalibrate returns CUSTOM alarms unchanged).
+                if (updatedAlarm !== alarm) repository.updateAlarm(updatedAlarm)
                 scheduler.schedule(updatedAlarm)
             }
         }
     }
 
     fun updateAlarmOffset(alarm: Alarm, offset: Int) {
-        viewModelScope.launch {
-            var updated = alarm.copy(offsetMinutes = offset)
-            if (alarm.alarmType == "SUNRISE" || alarm.alarmType == "SUNSET") {
-                val city = _savedCities.value.find { it.name.equals(alarm.locationName, true) }
-                val (lat, lng, tzOffset) = if (city != null) {
-                    Triple(city.latitude, city.longitude, city.timezoneOffset)
-                } else {
-                    Triple(_latitude.value, _longitude.value, _timezoneOffset.value)
-                }
-                val times = SunCalculator.calculateSunTimes(lat, lng, LocalDate.now(), tzOffset)
-                val baseTime = if (alarm.alarmType == "SUNRISE") {
-                    times.sunrise ?: LocalTime.of(6, 0)
-                } else {
-                    times.sunset ?: LocalTime.of(18, 0)
-                }
-                val targetLocalTime = baseTime.plusMinutes(offset.toLong())
-                updated = updated.copy(hour = targetLocalTime.hour, minute = targetLocalTime.minute)
-            }
+        viewModelScope.launch(Dispatchers.IO) {
+            // Recalibrate against the alarm's OWN bound location (resolver uses currentActiveLocation
+            // only as a fallback for legacy/unbound alarms). CUSTOM alarms just take the new offset.
+            val updated = SunAlarmResolver.recalibrate(alarm.copy(offsetMinutes = offset), currentActiveLocation())
             repository.updateAlarm(updated)
             if (updated.active) {
                 scheduler.schedule(updated)
             }
         }
     }
+
+    /** The location the app is currently showing — fallback for alarms with no recorded location. */
+    private fun currentActiveLocation() = SunAlarmResolver.Location(
+        _latitude.value, _longitude.value, _timezoneOffset.value, _locationName.value
+    )
 
     // Alarm management actions
     fun toggleAlarmActive(alarm: Alarm) {
@@ -511,43 +500,45 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     fun createDefaultAlarm(type: String) {
         val base = if (type == "SUNRISE") _sunriseTime.value else _sunsetTime.value
-        val alarm = Alarm(
+        val draft = Alarm(
             title = if (type == "SUNRISE") "Sunrise Alarm" else "Sunset Alarm",
             alarmType = type,
             hour = base.hour,
             minute = base.minute,
             offsetMinutes = 0,
             snoozeMinutes = _defaultSnoozeMinutes.value,
-            active = true,
-            locationName = _locationName.value
+            active = true
         )
-        viewModelScope.launch {
-            repository.insertAlarm(alarm)
-            scheduler.schedule(alarm)
+        viewModelScope.launch(Dispatchers.IO) {
+            // Bind to the active city (sets coordinates + timezone, not just the name) so the alarm is
+            // self-contained and hasLocation() is true with REAL coords, not (0,0).
+            val alarm = SunAlarmResolver.recalibrate(draft, currentActiveLocation())
+            val savedId = repository.insertAlarm(alarm)
+            scheduler.schedule(alarm.copy(id = savedId.toInt()))
         }
     }
 
     fun saveEditingAlarm() {
         val alarm = editingAlarm.value ?: return
-        viewModelScope.launch {
-            var finalAlarm = alarm
-            
-            // Re-apply sunrise/sunset shifts to base hours
-            if (alarm.alarmType == "SUNRISE") {
-                val targetLocalTime = _sunriseTime.value.plusMinutes(alarm.offsetMinutes.toLong())
-                finalAlarm = alarm.copy(hour = targetLocalTime.hour, minute = targetLocalTime.minute)
-            } else if (alarm.alarmType == "SUNSET") {
-                val targetLocalTime = _sunsetTime.value.plusMinutes(alarm.offsetMinutes.toLong())
-                finalAlarm = alarm.copy(hour = targetLocalTime.hour, minute = targetLocalTime.minute, locationName = _locationName.value)
+        viewModelScope.launch(Dispatchers.IO) {
+            // Bind & calibrate the alarm. A new alarm (or a legacy one with no location) adopts the
+            // currently active city; an already-bound alarm keeps its own city even if a different
+            // one is being viewed. This is what stops "set alarm for city A, switch to city B" from
+            // overwriting A's alarm.
+            val recalced = SunAlarmResolver.recalibrate(alarm, currentActiveLocation())
+            // CUSTOM alarms pass through recalibrate untouched, but the alarm list is filtered per
+            // active city — so still tag them with the active location's name to keep them visible.
+            val finalAlarm = if (recalced.alarmType == "CUSTOM") {
+                recalced.copy(locationName = _locationName.value)
+            } else {
+                recalced
             }
-            
-            // Ensure locationName is set even for CUSTOM alarms
-            finalAlarm = finalAlarm.copy(locationName = _locationName.value)
 
             val savedId = repository.insertAlarm(finalAlarm)
+            // insertAlarm uses REPLACE: a brand-new row returns its new id; an edited row keeps its id.
             val schedulerTarget = finalAlarm.copy(id = savedId.toInt())
             scheduler.schedule(schedulerTarget)
-            
+
             editingAlarm.value = null
         }
     }

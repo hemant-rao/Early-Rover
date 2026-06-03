@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [Alarm::class, TravelAlarm::class], version = 5, exportSchema = false)
+@Database(entities = [Alarm::class, TravelAlarm::class], version = 6, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun alarmDao(): AlarmDao
     abstract fun travelAlarmDao(): TravelAlarmDao
@@ -66,6 +66,24 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v5 -> v6 binds each SUNRISE/SUNSET alarm to the location it was created for, so switching
+         * the active city no longer overwrites another city's sun-alarm. Adds the coordinate/timezone
+         * columns to the existing `alarms` table (locationName was already added in v5); defaults
+         * (0.0/0.0/0.0) mark pre-existing rows as "legacy", which
+         * [AlarmViewModel.recalculateAndScheduleActiveAlarms] backfills with the active location on the
+         * next recompute. Defaults must match the [Alarm] entity so Room's schema validation passes.
+         *
+         * NOTE: verify on a real upgrade in the external build — Room can't be exercised here.
+         */
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `alarms` ADD COLUMN `latitude` REAL NOT NULL DEFAULT 0.0")
+                db.execSQL("ALTER TABLE `alarms` ADD COLUMN `longitude` REAL NOT NULL DEFAULT 0.0")
+                db.execSQL("ALTER TABLE `alarms` ADD COLUMN `timezoneOffset` REAL NOT NULL DEFAULT 0.0")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -73,7 +91,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "sun_alarm_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 // Safety net for any other (unforeseen) version jump only.
                 .fallbackToDestructiveMigration()
                 .build()
