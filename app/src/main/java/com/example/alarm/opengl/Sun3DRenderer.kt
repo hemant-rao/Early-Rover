@@ -64,10 +64,29 @@ class Sun3DRenderer : GLSurfaceView.Renderer {
             // Build Shaders
             val vertexShader = loadShader(GLES20.GL_VERTEX_SHADER, vertexShaderCode)
             val fragmentShader = loadShader(GLES20.GL_FRAGMENT_SHADER, fragmentShaderCode)
+            if (programId != 0) {
+                GLES20.glDeleteProgram(programId)
+                programId = 0
+            }
             programId = GLES20.glCreateProgram().also {
                 GLES20.glAttachShader(it, vertexShader)
                 GLES20.glAttachShader(it, fragmentShader)
                 GLES20.glLinkProgram(it)
+                val linkStatus = IntArray(1)
+                GLES20.glGetProgramiv(it, GLES20.GL_LINK_STATUS, linkStatus, 0)
+                if (linkStatus[0] == 0) {
+                    val log = GLES20.glGetProgramInfoLog(it)
+                    GLES20.glDetachShader(it, vertexShader)
+                    GLES20.glDetachShader(it, fragmentShader)
+                    GLES20.glDeleteShader(vertexShader)
+                    GLES20.glDeleteShader(fragmentShader)
+                    GLES20.glDeleteProgram(it)
+                    throw RuntimeException("Sun3DRenderer shader link failed: $log")
+                }
+                GLES20.glDetachShader(it, vertexShader)
+                GLES20.glDetachShader(it, fragmentShader)
+                GLES20.glDeleteShader(vertexShader)
+                GLES20.glDeleteShader(fragmentShader)
             }
 
             // Initialize shape buffers
@@ -88,7 +107,7 @@ class Sun3DRenderer : GLSurfaceView.Renderer {
         if (initError) return
         try {
             GLES20.glViewport(0, 0, width, height)
-            val ratio: Float = width.toFloat() / height.toFloat()
+            val ratio: Float = width.toFloat() / height.coerceAtLeast(1)
             Matrix.frustumM(projectionMatrix, 0, -ratio, ratio, -1f, 1f, 3f, 7f)
         } catch (e: Exception) {
             Log.e("Sun3DRenderer", "Surface changed failed: ", e)
@@ -254,8 +273,10 @@ class Sun3DRenderer : GLSurfaceView.Renderer {
             val compileStatus = IntArray(1)
             GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, compileStatus, 0)
             if (compileStatus[0] == 0) {
-                Log.e("Sun3DRenderer", "Shader compilation failure for type $type: " + GLES20.glGetShaderInfoLog(shader))
+                val log = GLES20.glGetShaderInfoLog(shader)
+                Log.e("Sun3DRenderer", "Shader compilation failure for type $type: $log")
                 GLES20.glDeleteShader(shader)
+                throw RuntimeException("Sun3DRenderer shader compile failed for type $type: $log")
             }
         }
     }

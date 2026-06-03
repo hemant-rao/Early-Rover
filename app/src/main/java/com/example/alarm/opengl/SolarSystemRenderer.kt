@@ -77,6 +77,12 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
     private lateinit var saturnRing: FloatBuffer
     private var saturnRingCount = 0
     private val glowBuf: FloatBuffer = alloc(6 * 4) // 6 verts * (x,y,z,radial)
+    // Reusable scratch for drawGlow (avoid per-frame allocations).
+    private val glowCorners = arrayOf(
+        floatArrayOf(-1f, -1f), floatArrayOf(1f, -1f), floatArrayOf(1f, 1f),
+        floatArrayOf(-1f, -1f), floatArrayOf(1f, 1f), floatArrayOf(-1f, 1f)
+    )
+    private val glowScratch = FloatArray(24)
 
     // ----- programs -----
     private var planetProg = 0
@@ -105,6 +111,13 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
             GLES20.glClearColor(0f, 0f, 0f, 0f) // transparent — Compose paints the sky behind
             GLES20.glEnable(GLES20.GL_DEPTH_TEST)
             GLES20.glEnable(GLES20.GL_BLEND)
+
+            // Release any programs from a prior surface (EGL context recreation) before re-linking.
+            if (planetProg != 0) { GLES20.glDeleteProgram(planetProg); planetProg = 0 }
+            if (sunProg != 0) { GLES20.glDeleteProgram(sunProg); sunProg = 0 }
+            if (orbitProg != 0) { GLES20.glDeleteProgram(orbitProg); orbitProg = 0 }
+            if (starProg != 0) { GLES20.glDeleteProgram(starProg); starProg = 0 }
+            if (glowProg != 0) { GLES20.glDeleteProgram(glowProg); glowProg = 0 }
 
             sphere = Sphere(28, 36)
             buildOrbitRing()
@@ -375,11 +388,8 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
         rx: Float, ry: Float, rz: Float, ux: Float, uy: Float, uz: Float
     ) {
         // Build a camera-facing quad (two triangles) with a radial coordinate.
-        val v = FloatArray(24)
-        val corners = arrayOf(
-            floatArrayOf(-1f, -1f), floatArrayOf(1f, -1f), floatArrayOf(1f, 1f),
-            floatArrayOf(-1f, -1f), floatArrayOf(1f, 1f), floatArrayOf(-1f, 1f)
-        )
+        val v = glowScratch
+        val corners = glowCorners
         var o = 0
         for (c in corners) {
             v[o++] = cx + (rx * c[0] + ux * c[1]) * size
@@ -481,6 +491,10 @@ class SolarSystemRenderer : GLSurfaceView.Renderer {
         GLES20.glAttachShader(p, v)
         GLES20.glAttachShader(p, f)
         GLES20.glLinkProgram(p)
+        GLES20.glDetachShader(p, v)
+        GLES20.glDetachShader(p, f)
+        GLES20.glDeleteShader(v)
+        GLES20.glDeleteShader(f)
         return p
     }
 
