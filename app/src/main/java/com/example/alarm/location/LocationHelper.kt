@@ -324,9 +324,13 @@ class LocationHelper(private val context: Context) {
         onSuccess: (lat: Double, lng: Double, timezoneOffset: Double, name: String) -> Unit,
         onFailure: (Exception) -> Unit
     ) {
+        // Uniform early guard so every caller (including the lastLocation success path,
+        // which does not re-check the flag itself) skips the wasted reverse-geocoding
+        // network I/O once the request has been cancelled (e.g. user picked a manual city).
+        if (cancelled.get()) return
         val lat = location.latitude
         val lng = location.longitude
-        
+
         // Simple timezone offset formula based on longitude (15 degrees = 1 hour)
         val rawTzOffset = Math.round(lng / 15.0).toDouble()
         val roundedTzOffset = Math.max(-12.0, Math.min(14.0, rawTzOffset))
@@ -429,26 +433,55 @@ class LocationHelper(private val context: Context) {
         try {
             val cts = CancellationTokenSource()
             locationCts = cts
+
+            // Top-level guard + timeout so detection always resolves even if
+            // getCurrentLocation neither completes nor fails (e.g. a wedged Play
+            // Services request). Without this, none of the listeners fire, the IP
+            // fallback is never reached, and the caller's spinner sticks forever.
+            val completed = AtomicBoolean(false)
+            val overallTimeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
+            overallTimeoutHandler.postDelayed({
+                if (!completed.compareAndSet(false, true)) return@postDelayed
+                // Cancel the wedged FusedLocation request and route to the system/IP
+                // fallback so the caller's onSuccess/onFailure is guaranteed to fire.
+                try {
+                    cts.cancel()
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                getSystemLocationFallback(onSuccess, onFailure)
+            }, 15000L)
+
             fusedLocationClient.getCurrentLocation(
                 Priority.PRIORITY_HIGH_ACCURACY,
                 cts.token
             ).addOnSuccessListener { location: Location? ->
                 if (location != null) {
+                    if (!completed.compareAndSet(false, true)) return@addOnSuccessListener
+                    overallTimeoutHandler.removeCallbacksAndMessages(null)
                     processLocation(location, onSuccess, onFailure)
                 } else {
                     // Fallback to Fused Location lastLocation
                     fusedLocationClient.lastLocation.addOnSuccessListener { lastLoc: Location? ->
                         if (lastLoc != null) {
+                            if (!completed.compareAndSet(false, true)) return@addOnSuccessListener
+                            overallTimeoutHandler.removeCallbacksAndMessages(null)
                             processLocation(lastLoc, onSuccess, onFailure)
                         } else {
+                            if (!completed.compareAndSet(false, true)) return@addOnSuccessListener
+                            overallTimeoutHandler.removeCallbacksAndMessages(null)
                             // Fallback to native LocationManager (GPS/Network)
                             getSystemLocationFallback(onSuccess, onFailure)
                         }
                     }.addOnFailureListener {
+                        if (!completed.compareAndSet(false, true)) return@addOnFailureListener
+                        overallTimeoutHandler.removeCallbacksAndMessages(null)
                         getSystemLocationFallback(onSuccess, onFailure)
                     }
                 }
             }.addOnFailureListener { exception ->
+                if (!completed.compareAndSet(false, true)) return@addOnFailureListener
+                overallTimeoutHandler.removeCallbacksAndMessages(null)
                 // Fallback to native LocationManager (GPS/Network)
                 getSystemLocationFallback(onSuccess, onFailure)
             }

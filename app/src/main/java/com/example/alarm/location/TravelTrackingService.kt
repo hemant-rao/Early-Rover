@@ -30,11 +30,14 @@ import com.example.alarm.data.TravelAlarm
 import com.google.android.gms.location.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.util.Locale
 
 class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
@@ -48,6 +51,12 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
     private var mediaPlayer: MediaPlayer? = null
     private var vibrator: Vibrator? = null
     private var arrivalWakeLock: android.os.PowerManager.WakeLock? = null
+
+    // Handle to the flashlight-blink coroutine so teardown can deterministically
+    // wait for it to fully terminate before the synchronous torch force-off, removing
+    // the last-write-wins race that could otherwise leave the torch stuck ON.
+    @Volatile
+    private var blinkJob: Job? = null
 
     // Set true the moment teardown begins (ACTION_STOP / onDestroy). A queued
     // onLocationResult can still fire after serviceScope is cancelled but before
@@ -136,6 +145,12 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
             _nearestAlarm.value = null
             _distanceToNearestKm.value = -1.0
         }
+    }
+
+    override fun attachBaseContext(base: Context) {
+        // Wrap with the active per-app locale so getString(...) for the notification
+        // channel labels resolves under the user's selected language (en/hi).
+        super.attachBaseContext(com.example.alarm.util.LocaleHelper.wrap(base))
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -495,7 +510,7 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
 
     private fun flashLightBlink() {
         val cameraManager = getSystemService(Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager ?: return
-        serviceScope.launch(Dispatchers.IO) {
+        blinkJob = serviceScope.launch(Dispatchers.IO) {
             try {
                 // Pick a camera that actually has a flash unit (index 0 may be the front camera).
                 val cameraId = cameraManager.cameraIdList.firstOrNull { id ->
@@ -503,19 +518,19 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
                         .get(android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
                 }
                 if (cameraId != null) {
-                    for (i in 1..25) {
-                        try {
-                            cameraManager.setTorchMode(cameraId, i % 2 == 1)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error setting camera torch mode: ", e)
-                        }
-                        kotlinx.coroutines.delay(400L)
-                    }
-                    // Clean up and ensure torch is OFF
+                    // The finally runs even on CancellationException (e.g. STOP/onDestroy during
+                    // a blink), so the torch is ALWAYS forced off as this coroutine's last action.
                     try {
-                        cameraManager.setTorchMode(cameraId, false)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                        for (i in 1..25) {
+                            try {
+                                cameraManager.setTorchMode(cameraId, i % 2 == 1)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error setting camera torch mode: ", e)
+                            }
+                            kotlinx.coroutines.delay(400L)
+                        }
+                    } finally {
+                        runCatching { cameraManager.setTorchMode(cameraId, false) }
                     }
                 }
             } catch (e: Exception) {
@@ -569,8 +584,11 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val name = "Travel Intelligent Watchdog"
-            val desc = "Keeps secure location tracking active while commuter is resting"
+            // Resolve channel labels from resources via the locale-wrapped base context
+            // (attachBaseContext) so the system Settings > Notifications labels follow the
+            // active per-app locale, matching AlarmService and removing the orphan resources.
+            val name = getString(com.example.R.string.channel_travel_name)
+            val desc = getString(com.example.R.string.channel_travel_description)
             val importance = NotificationManager.IMPORTANCE_LOW
             val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
                 description = desc
@@ -616,9 +634,22 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         // we reset just below.
         stopped = true
 
-        // Cancel in-flight coroutines (IO DB writes, the flashlight blink loop) FIRST so they
-        // stop before the static StateFlows below are reset and the torch is forced off. The
-        // blink loop's delay(400) is a cancellation point, so the flashlight stops promptly.
+        // Deterministically wait for the flashlight-blink coroutine to FULLY terminate before
+        // anything else. Its finally block forces the torch off as its last action, so joining
+        // here (cancelAndJoin) guarantees the synchronous force-off below happens-after the
+        // coroutine's own torch writes, eliminating the last-write-wins race that could leave
+        // the torch stuck ON. The blink loop's delay(400) is the cancellation point.
+        try {
+            blinkJob?.let { job ->
+                runBlocking { job.cancelAndJoin() }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed cancelling/joining flashlight blink job", e)
+        }
+        blinkJob = null
+
+        // Cancel any remaining in-flight coroutines (IO DB writes) so they stop before the
+        // static StateFlows below are reset and the torch is forced off.
         try {
             serviceScope.cancel()
         } catch (e: Exception) {

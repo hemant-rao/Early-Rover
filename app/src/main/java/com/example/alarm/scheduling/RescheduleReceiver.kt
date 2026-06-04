@@ -89,6 +89,9 @@ class RescheduleReceiver : BroadcastReceiver() {
                                         putExtra("ALARM_ID", updated.id)
                                         putExtra("ALARM_TITLE", updated.title)
                                         putExtra("ALARM_TYPE", updated.alarmType)
+                                        // Mirror AlarmScheduler.schedule()'s offset intent so the grace-window
+                                        // ring renders the same per-alarm snooze action the user configured.
+                                        putExtra("ALARM_SNOOZE_ENABLED", updated.snoozeEnabled)
                                     }
                                     val firePending = PendingIntent.getBroadcast(
                                         context,
@@ -103,6 +106,45 @@ class RescheduleReceiver : BroadcastReceiver() {
                                         now.toEpochMilli() + 1000L,
                                         firePending
                                     )
+
+                                    // Dual-ring sun alarm missed across boot: also re-fire the exact companion
+                                    // that schedule() arms (negative request code, IS_EXACT_ALSO=true), but only
+                                    // when that exact instant ALSO fell within the grace window. We fire "now"
+                                    // directly rather than via schedule(), which would arm the NEXT occurrence.
+                                    if (updated.ringAtExactAlso && updated.offsetMinutes != 0 &&
+                                        (updated.alarmType == "SUNRISE" || updated.alarmType == "SUNSET")) {
+                                        val exactAlarm = updated.copy(offsetMinutes = 0)
+                                        val intendedExact = SunAlarmResolver.fireDateTimeOn(exactAlarm, today)
+                                            .atZone(zone)
+                                            .toInstant()
+                                        val lateByExact = now.toEpochMilli() - intendedExact.toEpochMilli()
+                                        if (lateByExact in 0..graceMillis) {
+                                            val fireIntentExact = Intent(context, AlarmReceiver::class.java).apply {
+                                                putExtra("ALARM_ID", updated.id)
+                                                putExtra(
+                                                    "ALARM_TITLE",
+                                                    updated.title.ifEmpty {
+                                                        if (updated.alarmType == "SUNRISE") "Sunrise Exact" else "Sunset Exact"
+                                                    }
+                                                )
+                                                putExtra("ALARM_TYPE", updated.alarmType)
+                                                putExtra("IS_EXACT_ALSO", true)
+                                                putExtra("ALARM_SNOOZE_ENABLED", updated.snoozeEnabled)
+                                            }
+                                            val firePendingExact = PendingIntent.getBroadcast(
+                                                context,
+                                                -updated.id,
+                                                fireIntentExact,
+                                                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                                            )
+                                            alarmManager.setExactAndAllowWhileIdle(
+                                                AlarmManager.RTC_WAKEUP,
+                                                now.toEpochMilli() + 1000L,
+                                                firePendingExact
+                                            )
+                                        }
+                                    }
+
                                     database.alarmDao().updateAlarm(updated.copy(active = false))
                                 } else {
                                     // Past the grace window: mark missed instead of firing a day late.
