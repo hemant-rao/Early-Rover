@@ -283,6 +283,21 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "DISMISS ALARM" to "अलार्म खारिज करें",
         "ARRIVED - DISMISS ALARM" to "पहुँच गए - अलार्म खारिज करें",
         "SNOOZE WAKE" to "स्नूज़ करें",
+        // Dashboard hero, travel cards, repeat presets, and skip/turn-off dialog
+        "Wake with the Sun" to "सूरज के साथ जागें",
+        "Alarms synced to sunrise & sunset at your exact location." to "आपके सटीक स्थान के सूर्योदय और सूर्यास्त के साथ समकालिक अलार्म।",
+        "Journey Active" to "यात्रा सक्रिय",
+        "Tracking" to "ट्रैकिंग",
+        "Add Travel Alarm" to "यात्रा अलार्म जोड़ें",
+        "Get woken when you near your destination." to "गंतव्य के पास पहुँचने पर जागें।",
+        "Turn off this alarm?" to "यह अलार्म बंद करें?",
+        "This alarm repeats. Skip just the next occurrence, or turn it off completely?" to "यह अलार्म दोहराता है। केवल अगली बार छोड़ें, या इसे पूरी तरह बंद करें?",
+        "Skip today only" to "केवल आज छोड़ें",
+        "Turn off completely" to "पूरी तरह बंद करें",
+        "Cancel" to "रद्द करें",
+        "Once" to "एक बार",
+        "Mon-Fri" to "सोम-शुक्र",
+        "Custom" to "कस्टम",
         "Default Snooze Duration" to "डिफ़ॉल्ट स्नूज़ समय",
         "Select Language" to "भाषा चुनें (Language)",
         "Only English & Hindi are fully translated; other languages change date/number format only." to "केवल अंग्रेज़ी और हिंदी का पूरा अनुवाद उपलब्ध है; अन्य भाषाएँ केवल तारीख/संख्या प्रारूप बदलती हैं।",
@@ -583,10 +598,26 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             val activeLocation = currentActiveLocation()
             for (alarm in list) {
                 // No date passed: each sun-alarm calibrates against "today" in its OWN city's timezone.
-                val updatedAlarm = SunAlarmResolver.recalibrate(alarm, activeLocation)
+                var updatedAlarm = SunAlarmResolver.recalibrate(alarm, activeLocation)
+                // Hygiene: drop a stale (already-past) skipDate so it can't linger in the DB. The
+                // resolver already ignores past skip dates, so this is purely cleanup. Compared in the
+                // alarm's own zone via the recalibrated coordinates, falling back to the device zone.
+                var skipCleared = false
+                if (alarm.skipDate.isNotEmpty()) {
+                    val zone = if ((updatedAlarm.alarmType == "SUNRISE" || updatedAlarm.alarmType == "SUNSET") && updatedAlarm.hasLocation())
+                        SunAlarmResolver.zoneOf(updatedAlarm.timezoneOffset)
+                    else java.time.ZoneId.systemDefault()
+                    val todayThere = LocalDate.now(zone)
+                    val parsed = runCatching { LocalDate.parse(alarm.skipDate) }.getOrNull()
+                    if (parsed == null || parsed.isBefore(todayThere)) {
+                        updatedAlarm = updatedAlarm.copy(skipDate = "")
+                        skipCleared = true
+                    }
+                }
                 // Only persist + reschedule when the fields that actually drive the fire time changed;
                 // recalibrate always returns a fresh copy (new updatedAt) so the !== check alone churns.
-                val changed = updatedAlarm.hour != alarm.hour ||
+                val changed = skipCleared ||
+                    updatedAlarm.hour != alarm.hour ||
                     updatedAlarm.minute != alarm.minute ||
                     updatedAlarm.latitude != alarm.latitude ||
                     updatedAlarm.longitude != alarm.longitude ||
@@ -627,6 +658,32 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 scheduler.schedule(updated)
             } else {
                 scheduler.cancel(updated)
+            }
+        }
+    }
+
+    /**
+     * "Skip today only" for a (typically repeating) alarm: marks the alarm's NEXT occurrence date as
+     * skipped, so the resolver advances to the one after it. The alarm stays ACTIVE — it just misses
+     * a single occurrence and keeps repeating afterward. Persists the new skipDate and reschedules.
+     *
+     * Reuses [SunAlarmResolver.nextOccurrenceDate] (the same logic the scheduler uses) so the date we
+     * skip is exactly the occurrence that would otherwise fire next. Calling this repeatedly walks
+     * forward one occurrence at a time, because the resolver already honors the current skipDate when
+     * computing the next occurrence.
+     */
+    fun skipNextOccurrence(alarm: Alarm) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val nextDate = SunAlarmResolver.nextOccurrenceDate(
+                alarm, java.time.Instant.now(), java.time.ZoneId.systemDefault()
+            )
+            val updated = alarm.copy(
+                skipDate = nextDate.toString(), // ISO yyyy-MM-dd
+                updatedAt = System.currentTimeMillis()
+            )
+            repository.updateAlarm(updated)
+            if (updated.active) {
+                scheduler.schedule(updated)
             }
         }
     }
