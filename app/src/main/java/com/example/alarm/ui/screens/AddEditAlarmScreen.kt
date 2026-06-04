@@ -186,7 +186,12 @@ fun AddEditAlarmScreen(
             }
 
             // 2. TIME SELECTOR OR EVENT OFFSET SELECTOR
-            if (alarm.alarmType == "CUSTOM") {
+            // A CUSTOM alarm is purely a manual clock time: it shows ONLY the hour/minute
+            // wheels and never any sunrise/sunset offset controls. The sun "Trigger Offset"
+            // section is gated strictly to the known sun types so an unexpected alarmType can
+            // never leak sun UI into a custom alarm.
+            val isSunAlarm = alarm.alarmType == "SUNRISE" || alarm.alarmType == "SUNSET"
+            if (!isSunAlarm) {
                 Text(
                     text = viewModel.translate("Configure Clock Time"),
                     fontSize = 14.sp,
@@ -415,57 +420,134 @@ fun AddEditAlarmScreen(
                 colors = CardDefaults.cardColors(containerColor = SleekCardBg)
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
-                    Text(
-                        text = viewModel.translate("Fires weekly during selected days"),
-                        fontSize = 13.sp,
-                        color = SleekMutedText
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-
                     val activeDays = alarm.getRepeatDaysList()
-                    // Unambiguous two-letter day labels so Tue/Thu and Sat/Sun don't both
-                    // collapse to "T"/"S". Localized via translate() like the rest of the screen.
-                    val shortDays = listOf("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
+
+                    // Derive which quick-preset matches the current alarm:
+                    //  - empty repeatDays            -> "Once" (no repeat)
+                    //  - exactly the weekdays 1..5   -> "Mon-Fri"
+                    //  - anything else (incl. a single explicitly chosen weekday set
+                    //    that isn't 1..5, weekends, etc.) -> "Custom"
+                    val isOnce = activeDays.isEmpty()
+                    val isMonFri = activeDays.sorted() == listOf(1, 2, 3, 4, 5)
+                    val selectedPreset = when {
+                        isOnce -> "ONCE"
+                        isMonFri -> "MON_FRI"
+                        else -> "CUSTOM"
+                    }
+                    // Local toggle so tapping "Custom" reveals the day chips even when the
+                    // alarm currently resolves to Once/Mon-Fri (e.g. switching from Once to
+                    // a hand-picked schedule). Seeded from the persisted value.
+                    var showCustomDays by remember(alarm.id) { mutableStateOf(selectedPreset == "CUSTOM") }
+                    // Keep the reveal in sync if the underlying preset becomes Custom.
+                    if (selectedPreset == "CUSTOM" && !showCustomDays) showCustomDays = true
+
+                    val presets = listOf(
+                        Triple("ONCE", viewModel.translate("Once"), ""),
+                        Triple("MON_FRI", viewModel.translate("Mon-Fri"), "1,2,3,4,5"),
+                        Triple("CUSTOM", viewModel.translate("Custom"), null)
+                    )
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        for (i in 1..7) {
-                            val active = activeDays.contains(i)
+                        presets.forEach { (key, label, days) ->
+                            val selected = selectedPreset == key || (key == "CUSTOM" && showCustomDays)
                             Box(
                                 modifier = Modifier
-                                    .size(42.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (active) SleekPrimary else SleekBorder.copy(alpha = 0.5f)
-                                    )
-                                    .clickable {
-                                        val newList = if (active) {
-                                            activeDays.filter { it != i }
-                                        } else {
-                                            activeDays + i
-                                        }
-                                        viewModel.editingAlarm.value = alarm.copy(
-                                            repeatDays = newList.sorted().joinToString(",")
-                                        )
-                                    }
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(if (selected) SleekPrimary else SleekBorder.copy(alpha = 0.5f))
                                     .border(
                                         BorderStroke(
                                             width = 1.dp,
-                                            color = if (active) SleekSecondary else Color.Transparent
+                                            color = if (selected) SleekSecondary else Color.Transparent
                                         ),
-                                        shape = CircleShape
+                                        shape = RoundedCornerShape(12.dp)
                                     )
-                                    .testTag("day_selector_$i"),
+                                    .clickable {
+                                        when (key) {
+                                            "CUSTOM" -> {
+                                                // Reveal the manual day chips; keep whatever
+                                                // days are already set so the user edits them.
+                                                showCustomDays = true
+                                            }
+                                            else -> {
+                                                // Single tap commits the preset immediately.
+                                                showCustomDays = false
+                                                viewModel.editingAlarm.value =
+                                                    alarm.copy(repeatDays = days ?: "")
+                                            }
+                                        }
+                                    }
+                                    .padding(vertical = 12.dp)
+                                    .testTag("repeat_preset_$key"),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = viewModel.translate(shortDays[i - 1]),
-                                    color = if (active) Color.White else SleekMutedText,
+                                    text = label,
+                                    fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp
+                                    color = if (selected) Color.White else SleekMutedText
                                 )
+                            }
+                        }
+                    }
+
+                    // Manual 7-day chips, only when "Custom" is selected.
+                    if (showCustomDays) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = viewModel.translate("Fires weekly during selected days"),
+                            fontSize = 13.sp,
+                            color = SleekMutedText
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Unambiguous two-letter day labels so Tue/Thu and Sat/Sun don't both
+                        // collapse to "T"/"S". Localized via translate() like the rest of the screen.
+                        val shortDays = listOf("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            for (i in 1..7) {
+                                val active = activeDays.contains(i)
+                                Box(
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (active) SleekPrimary else SleekBorder.copy(alpha = 0.5f)
+                                        )
+                                        .clickable {
+                                            val newList = if (active) {
+                                                activeDays.filter { it != i }
+                                            } else {
+                                                activeDays + i
+                                            }
+                                            viewModel.editingAlarm.value = alarm.copy(
+                                                repeatDays = newList.sorted().joinToString(",")
+                                            )
+                                        }
+                                        .border(
+                                            BorderStroke(
+                                                width = 1.dp,
+                                                color = if (active) SleekSecondary else Color.Transparent
+                                            ),
+                                            shape = CircleShape
+                                        )
+                                        .testTag("day_selector_$i"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = viewModel.translate(shortDays[i - 1]),
+                                        color = if (active) Color.White else SleekMutedText,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
+                                    )
+                                }
                             }
                         }
                     }
