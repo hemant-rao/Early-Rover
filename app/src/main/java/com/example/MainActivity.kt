@@ -1,5 +1,6 @@
 package com.example
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -19,13 +20,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import com.example.alarm.util.LocaleHelper
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -44,14 +48,19 @@ class MainActivity : ComponentActivity() {
     // Held as Compose state so onCreate/onNewIntent can both route the UI to the right page.
     private val pendingNavDestination = mutableStateOf<String?>(null)
 
+    // True when this Activity instance was launched by a firing alarm (full-screen intent).
+    // Used to land on the dashboard (not the splash) after the ring screen is dismissed on a cold start.
+    private val launchedFromAlarm = mutableStateOf(false)
+
     // Apply the saved per-app locale to every fresh Activity context (no AppCompat needed).
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(LocaleHelper.wrap(newBase))
     }
 
-    // ACTION_TIME_CHANGED / ACTION_TIMEZONE_CHANGED are only delivered to dynamically
-    // registered receivers (not manifest-declared ones), so we register RescheduleReceiver
-    // here to recalibrate sun alarms when the user changes the clock or flies to a new zone.
+    // ACTION_TIME_CHANGED (manual clock change) is only delivered to dynamically registered
+    // receivers, so we register RescheduleReceiver here to recalibrate sun alarms on a clock
+    // change. TIMEZONE_CHANGED is handled solely by the manifest-declared receiver (it IS
+    // delivered there); we do NOT also register it here, to avoid a double reschedule.
     private val timeChangeReceiver = RescheduleReceiver()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,7 +69,6 @@ class MainActivity : ComponentActivity() {
 
         val timeFilter = IntentFilter().apply {
             addAction(Intent.ACTION_TIME_CHANGED)
-            addAction(Intent.ACTION_TIMEZONE_CHANGED)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(timeChangeReceiver, timeFilter, Context.RECEIVER_NOT_EXPORTED)
@@ -123,6 +131,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // Keep the status/navigation bar icon contrast in sync with the RESOLVED app theme
+            // (Light/Dark toggle and AUTO daylight transitions), not just the system dark setting
+            // that enableEdgeToEdge() defaults to. Re-runs whenever darkTheme changes.
+            val view = LocalView.current
+            if (!view.isInEditMode) {
+                SideEffect {
+                    val window = (view.context as Activity).window
+                    WindowCompat.getInsetsController(window, view).apply {
+                        isAppearanceLightStatusBars = !darkTheme
+                        isAppearanceLightNavigationBars = !darkTheme
+                    }
+                }
+            }
+
             MyApplicationTheme(darkTheme = darkTheme) {
                 Box(modifier = Modifier.fillMaxSize()) {
                 val navController = rememberNavController()
@@ -158,14 +180,15 @@ class MainActivity : ComponentActivity() {
                             if (isTravel) {
                                 pendingNavDestination.value = "travel"
                             }
-                        }
+                        },
+                        translate = { s -> viewModel.translate(s) }
                     )
                 } else {
                     NavHost(
                         navController = navController,
                         // On a recreate (language change, rotation, restore) skip the splash and
                         // land on the dashboard instead of replaying the splash animation.
-                        startDestination = if (savedInstanceState != null) "dashboard" else "splash",
+                        startDestination = if (savedInstanceState != null || launchedFromAlarm.value) "dashboard" else "splash",
                         modifier = Modifier.fillMaxSize()
                     ) {
                         composable("splash") {
@@ -301,6 +324,10 @@ class MainActivity : ComponentActivity() {
             val title = intent.getStringExtra("RINGING_ALARM_TITLE") ?: "Alarm Clock"
             val type = intent.getStringExtra("RINGING_ALARM_TYPE") ?: "CUSTOM"
             model.setRingingState(id, title, type)
+
+            // Remember this was an alarm launch so dismissing the ring screen on a cold
+            // start lands on the dashboard instead of replaying the splash animation.
+            launchedFromAlarm.value = true
 
             // Clean values to prevent looping on recompose
             intent.removeExtra("RINGING_ALARM_ID")

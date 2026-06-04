@@ -4,7 +4,9 @@ import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import com.example.alarm.data.Alarm
 import com.example.alarm.data.SunAlarmResolver
@@ -15,6 +17,21 @@ import java.util.Calendar
 class AlarmScheduler(private val context: Context) {
 
     private val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+    /**
+     * Whether exact alarms can currently be scheduled. On API 31+ this reflects the
+     * user-revocable SCHEDULE_EXACT_ALARM permission; on older APIs exact alarms are
+     * always available. The UI can use this to surface a persistent warning and offer
+     * to launch [Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM] so the silent degrade
+     * to inexact (delayed) alarms becomes observable and recoverable.
+     */
+    fun canScheduleExactAlarms(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            alarmManager.canScheduleExactAlarms()
+        } else {
+            true
+        }
+    }
 
     fun schedule(alarm: Alarm) {
         if (!alarm.active) {
@@ -159,6 +176,22 @@ class AlarmScheduler(private val context: Context) {
     }
 
     companion object {
+        /**
+         * Intent that opens the system screen where the user can grant the exact-alarm
+         * permission for this app (API 31+). Returns null on older APIs where no such
+         * screen exists. The UI should launch this when [canScheduleExactAlarms] is false.
+         */
+        fun exactAlarmSettingsIntent(context: Context): Intent? {
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                Intent(
+                    Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                    Uri.parse("package:" + context.packageName)
+                )
+            } else {
+                null
+            }
+        }
+
         /**
          * Next fire time as a [Calendar]. The actual timezone-aware logic lives in the pure,
          * unit-testable [SunAlarmResolver.nextTriggerInstant]; this only adapts it to the device

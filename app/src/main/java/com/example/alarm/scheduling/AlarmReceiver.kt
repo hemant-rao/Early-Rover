@@ -15,6 +15,9 @@ class AlarmReceiver : BroadcastReceiver() {
         val alarmId = intent.getIntExtra("ALARM_ID", -1)
         val alarmTitle = intent.getStringExtra("ALARM_TITLE") ?: "Alarm"
         val alarmType = intent.getStringExtra("ALARM_TYPE") ?: "CUSTOM"
+        // Forwarded so AlarmService can give the exact-alarm companion ring a distinct
+        // notification id / request codes (set on the exact PendingIntent by AlarmScheduler).
+        val isExactAlso = intent.getBooleanExtra("IS_EXACT_ALSO", false)
 
         Log.d("AlarmReceiver", "Alarm fired! Id: $alarmId, Title: $alarmTitle, Type: $alarmType")
 
@@ -23,6 +26,7 @@ class AlarmReceiver : BroadcastReceiver() {
             putExtra("ALARM_ID", alarmId)
             putExtra("ALARM_TITLE", alarmTitle)
             putExtra("ALARM_TYPE", alarmType)
+            putExtra("IS_EXACT_ALSO", isExactAlso)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
