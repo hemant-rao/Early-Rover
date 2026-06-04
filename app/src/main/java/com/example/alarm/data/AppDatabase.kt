@@ -92,8 +92,10 @@ abstract class AppDatabase : RoomDatabase() {
                     "sun_alarm_database"
                 )
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
-                // Safety net for any other (unforeseen) version jump only.
-                .fallbackToDestructiveMigration()
+                // Only tolerate destructive recreation on an unmapped DOWNGRADE (e.g. older-APK
+                // rollback). Unmapped UPGRADES intentionally throw so a missing migration is caught
+                // in testing rather than silently wiping every alarm in production.
+                .fallbackToDestructiveMigrationOnDowngrade()
                 .build()
                 INSTANCE = instance
                 instance

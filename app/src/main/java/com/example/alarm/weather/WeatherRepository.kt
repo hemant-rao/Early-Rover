@@ -75,37 +75,38 @@ data class DetailedWeatherInfo(
  */
 object WeatherRepository {
 
-    fun fetchCurrent(latitude: Double, longitude: Double): WeatherInfo? {
-        return try {
-            val url = URL(
-                "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
-                    "&current=temperature_2m,weather_code,is_day,cloud_cover&timezone=auto"
-            )
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 5000
-                readTimeout = 5000
-            }
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                connection.errorStream?.use { it.readBytes() }
-                connection.disconnect()
-                return null
-            }
+    suspend fun fetchCurrent(latitude: Double, longitude: Double): WeatherInfo? =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = URL(
+                    "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
+                        "&current=temperature_2m,weather_code,is_day,cloud_cover&timezone=auto"
+                )
+                val connection = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                }
+                if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                    connection.errorStream?.use { it.readBytes() }
+                    connection.disconnect()
+                    return@withContext null
+                }
 
-            val response = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
-            val current = JSONObject(response).optJSONObject("current") ?: return null
+                val response = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
+                val current = JSONObject(response).optJSONObject("current") ?: return@withContext null
 
-            // Missing weather_code -> -1 (unknown) so we don't silently fall back to "clear".
-            val code = current.optInt("weather_code", -1)
-            val cloudCover = current.optInt("cloud_cover", -1)
-            val isDay = current.optInt("is_day", 1) == 1
-            val temp = current.optDouble("temperature_2m", Double.NaN)
-            WeatherInfo(refineCondition(code, cloudCover), isDay, temp, code)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
+                // Missing weather_code -> -1 (unknown) so we don't silently fall back to "clear".
+                val code = current.optInt("weather_code", -1)
+                val cloudCover = current.optInt("cloud_cover", -1)
+                val isDay = current.optInt("is_day", 1) == 1
+                val temp = current.optDouble("temperature_2m", Double.NaN)
+                WeatherInfo(refineCondition(code, cloudCover), isDay, temp, code)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                null
+            }
         }
-    }
 
     /**
      * Fetches current air-quality indices (European AQI, US AQI) and particulate matter
@@ -149,8 +150,9 @@ object WeatherRepository {
      * - 10 past days & 10 future days of records (21 days in total)
      * - Humidity, apparent temperature, precipitation, wind speed, wind gusts
      */
-    fun fetchDetailed(latitude: Double, longitude: Double): DetailedWeatherInfo? {
-        return try {
+    suspend fun fetchDetailed(latitude: Double, longitude: Double): DetailedWeatherInfo? =
+        withContext(Dispatchers.IO) {
+        try {
             val urlString = "https://api.open-meteo.com/v1/forecast?" +
                     "latitude=$latitude" +
                     "&longitude=$longitude" +
@@ -170,13 +172,13 @@ object WeatherRepository {
             if (connection.responseCode != HttpURLConnection.HTTP_OK) {
                 connection.errorStream?.use { it.readBytes() }
                 connection.disconnect()
-                return null
+                return@withContext null
             }
 
             val response = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
             val root = JSONObject(response)
-            
-            val currentJson = root.optJSONObject("current") ?: return null
+
+            val currentJson = root.optJSONObject("current") ?: return@withContext null
             val code = currentJson.optInt("weather_code", -1)
             val cloudCover = currentJson.optInt("cloud_cover", -1)
             val isDay = currentJson.optInt("is_day", 1) == 1
@@ -272,7 +274,7 @@ object WeatherRepository {
             e.printStackTrace()
             null
         }
-    }
+        }
 
     /**
      * Combines the WMO [code] with the measured [cloudCover] percent so the visible sky
