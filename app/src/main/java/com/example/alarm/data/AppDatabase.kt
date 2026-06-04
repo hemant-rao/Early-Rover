@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [Alarm::class, TravelAlarm::class], version = 6, exportSchema = false)
+@Database(entities = [Alarm::class, TravelAlarm::class], version = 7, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun alarmDao(): AlarmDao
     abstract fun travelAlarmDao(): TravelAlarmDao
@@ -84,6 +84,20 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * v6 -> v7 adds the per-occurrence "skip today" support: a single ISO yyyy-MM-dd date the
+         * resolver advances past once (an empty string means nothing is skipped). Preserves all
+         * existing alarms. Default must match the [Alarm] entity (empty string) so Room's
+         * post-migration schema validation passes.
+         *
+         * NOTE: verify on a real upgrade in the external build — Room can't be exercised here.
+         */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `alarms` ADD COLUMN `skipDate` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -91,7 +105,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "sun_alarm_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 // Only tolerate destructive recreation on an unmapped DOWNGRADE (e.g. older-APK
                 // rollback). Unmapped UPGRADES intentionally throw so a missing migration is caught
                 // in testing rather than silently wiping every alarm in production.

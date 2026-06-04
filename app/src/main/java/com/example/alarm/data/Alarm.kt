@@ -12,6 +12,10 @@ data class Alarm(
     val minute: Int, // Selected minute for CUSTOM, or calculated minute for SUNRISE/SUNSET
     val offsetMinutes: Int = 0, // negative for "before", positive for "after"
     val repeatDays: String = "", // e.g. "1,2,3,4,5" where 1=Mon, 2=Tue... 7=Sun. Empty means one-time.
+    // ISO yyyy-MM-dd of a single upcoming occurrence to SKIP ("skip today only" for a repeating
+    // alarm). Empty = nothing skipped. The resolver advances past this date once, then it is ignored
+    // again on subsequent occurrences. A date strictly before today is treated as stale (ignored).
+    val skipDate: String = "",
     val active: Boolean = true,
     val vibrationEnabled: Boolean = true,
     val snoozeEnabled: Boolean = true,

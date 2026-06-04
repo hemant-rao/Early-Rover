@@ -123,16 +123,33 @@ object SunAlarmResolver {
      */
     fun nextTriggerInstant(alarm: Alarm, now: Instant, deviceZone: ZoneId): Instant {
         val zone = zoneFor(alarm, deviceZone)
+        val day = nextOccurrenceDate(alarm, now, deviceZone)
+        return fireDateTimeOn(alarm, day).atZone(zone).toInstant()
+    }
+
+    /**
+     * The sun-event/calendar date (in the alarm's own zone) of the occurrence the alarm will next
+     * fire for, relative to [now]. This is the date the user selected the sun event on — NOT
+     * necessarily the date of the resulting fire INSTANT, which a large negative offset may roll back
+     * to the previous day (handled in [fireDateTimeOn]). [nextTriggerInstant] turns this date into the
+     * absolute instant; the ViewModel's "skip today only" action marks this date as skipped.
+     *
+     * Honors any [Alarm.skipDate] already set, so skipping repeatedly walks forward one occurrence at
+     * a time instead of re-marking the same day. A stale (past) or empty skipDate is ignored.
+     */
+    fun nextOccurrenceDate(alarm: Alarm, now: Instant, deviceZone: ZoneId): LocalDate {
+        val zone = zoneFor(alarm, deviceZone)
         val today = now.atZone(zone).toLocalDate()
         val repeatDays = alarm.getRepeatDaysList()
+        // A non-empty, non-stale skip date (the single upcoming occurrence the user chose to skip).
+        // Parsed in the alarm's own zone terms via [today]; a date strictly before today is stale.
+        val skip = skipDateFor(alarm, today)
 
         if (repeatDays.isEmpty()) {
             val todayFire = fireDateTimeOn(alarm, today).atZone(zone).toInstant()
-            return if (todayFire.isAfter(now)) todayFire
-            else {
-                val tomorrow = today.plusDays(1)
-                fireDateTimeOn(alarm, tomorrow).atZone(zone).toInstant()
-            }
+            val firstDay = if (todayFire.isAfter(now)) today else today.plusDays(1)
+            // If that one occurrence is the skipped date, advance one more day.
+            return if (skip != null && firstDay == skip) firstDay.plusDays(1) else firstDay
         }
 
         // Repeating: nearest selected weekday whose time is strictly in the future.
@@ -140,15 +157,33 @@ object SunAlarmResolver {
         // Match the weekday against the sun-event day the user selected; the resulting fire INSTANT
         // may still shift to the previous calendar day for a large negative offset (handled inside
         // fireDateTimeOn), which is the astronomically correct moment.
-        for (add in 0..7) {
+        // Scan up to 15 days so a skipped occurrence can always advance to the following one.
+        for (add in 0..14) {
             val day = today.plusDays(add.toLong())
             if (repeatDays.contains(day.dayOfWeek.value)) {
+                // Skip the single chosen occurrence; the next matching weekday is used instead.
+                if (skip != null && day == skip) continue
                 val fire = fireDateTimeOn(alarm, day).atZone(zone).toInstant()
-                if (fire.isAfter(now)) return fire
+                if (fire.isAfter(now)) return day
             }
         }
         // Unreachable in practice (a non-empty repeat set always matches within 8 days).
-        return fireDateTimeOn(alarm, today).atZone(zone).toInstant()
+        return today
+    }
+
+    /**
+     * Parses [Alarm.skipDate] into a [LocalDate], or null when it is empty, unparseable, or stale
+     * (strictly before [today] in the alarm's own zone). Stale skip dates are ignored so a skip the
+     * user set in the past can never suppress a future occurrence.
+     */
+    private fun skipDateFor(alarm: Alarm, today: LocalDate): LocalDate? {
+        if (alarm.skipDate.isEmpty()) return null
+        val parsed = try {
+            LocalDate.parse(alarm.skipDate)
+        } catch (e: Exception) {
+            return null
+        }
+        return if (parsed.isBefore(today)) null else parsed
     }
 
     /**
