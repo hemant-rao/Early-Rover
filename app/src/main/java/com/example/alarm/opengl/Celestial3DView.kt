@@ -1,7 +1,6 @@
 package com.example.alarm.opengl
 
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -24,11 +23,9 @@ import java.time.LocalTime
  * [SolarSystemGLView], so the scene already reflects the current moment (each planet
  * sits at its real heliocentric angle "right now").
  *
- * On top of the heliocentric layout this view layers the spec-conformant daylight ring
- * ([Sun3DView]): [sunriseTime], [sunsetTime] and [activeAlarms] drive a "now" sun marker
- * whose position on the ring encodes the current time within the sunrise->sunset daylight
- * span (sunrise at one side, sunset at the other), plus sunrise/sunset/alarm beads — the
- * defining requirement of the original 3D spec.
+ * NOTE: this is the original, finalized solar/planet visualization and must not be
+ * altered. [sunriseTime], [sunsetTime] and [activeAlarms] are accepted for API
+ * compatibility but are intentionally NOT rendered as any overlay on this scene.
  */
 @Composable
 fun Celestial3DView(
@@ -45,33 +42,20 @@ fun Celestial3DView(
     val lifecycleOwner = LocalLifecycleOwner.current
     var glView by remember { mutableStateOf<SolarSystemGLView?>(null) }
 
-    Box(modifier = modifier.fillMaxSize()) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                SolarSystemGLView(ctx).also {
-                    it.animateOrbits = animateOrbits
-                    it.onBodyTap = { name -> onPlanetSelected(name) }
-                    glView = it
-                }
-            },
-            update = {
+    AndroidView(
+        modifier = modifier.fillMaxSize(),
+        factory = { ctx ->
+            SolarSystemGLView(ctx).also {
                 it.animateOrbits = animateOrbits
                 it.onBodyTap = { name -> onPlanetSelected(name) }
+                glView = it
             }
-        )
-
-        // Spec-conformant time-of-day overlay: a "now" sun marker travels the daylight
-        // ring from sunrise to sunset, with sunrise/sunset and per-alarm beads. This is
-        // the requirement the heliocentric planet layout alone does not express.
-        Sun3DView(
-            modifier = Modifier.fillMaxSize(),
-            sunriseTime = sunriseTime,
-            sunsetTime = sunsetTime,
-            activeAlarms = activeAlarms.map { LocalTime.of(it.first, it.second) },
-            isDark = isDark
-        )
-    }
+        },
+        update = {
+            it.animateOrbits = animateOrbits
+            it.onBodyTap = { name -> onPlanetSelected(name) }
+        }
+    )
 
     DisposableEffect(lifecycleOwner, glView) {
         val view = glView ?: return@DisposableEffect onDispose {}
