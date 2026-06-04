@@ -1,8 +1,5 @@
 package com.example.alarm.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -44,10 +41,6 @@ import androidx.core.content.ContextCompat
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -107,10 +100,21 @@ fun DashboardScreen(
         LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, MMM dd", Locale.getDefault()))
     }
 
-    var showQuickAddMenu by remember { mutableStateOf(false) }
     var showLocationSearchDialog by remember { mutableStateOf(false) }
     var selectedPlanet by remember { mutableStateOf<String?>(null) }
     var activeTab by remember { mutableIntStateOf(0) }
+    // Alarm whose OFF-toggle on a repeating alarm triggered the skip/turn-off dialog.
+    var skipDialogAlarm by remember { mutableStateOf<Alarm?>(null) }
+    val isTravelTrackingActive by viewModel.isTravelTrackingActive.collectAsStateWithLifecycle()
+
+    // Shared OFF-toggle handler: repeating alarms prompt skip-vs-turn-off; one-time alarms toggle directly.
+    val onAlarmToggle: (Alarm) -> Unit = { alarm ->
+        if (alarm.active && alarm.isRepeating()) {
+            skipDialogAlarm = alarm
+        } else {
+            viewModel.toggleAlarmActive(alarm)
+        }
+    }
 
     val activeCityIndex = remember(savedCities, locationName) {
         val exactMatch = savedCities.indexOfFirst { it.name.equals(locationName, true) }
@@ -123,6 +127,17 @@ fun DashboardScreen(
     }
     val pagerState = rememberPagerState(initialPage = activeCityIndex) { savedCities.size }
     var totalDragAmount by remember { mutableStateOf(0f) }
+
+    // After savedCities/active selection changes (e.g. a brand-new city was just added and
+    // made the manual selection), land the pager on the active city so the dashboard shows it.
+    LaunchedEffect(activeCityIndex, savedCities.size) {
+        if (savedCities.isNotEmpty() &&
+            activeCityIndex in 0 until savedCities.size &&
+            pagerState.currentPage != activeCityIndex
+        ) {
+            pagerState.animateScrollToPage(activeCityIndex)
+        }
+    }
 
     val swipeModifier = if (savedCities.size > 1) {
         Modifier.pointerInput(savedCities, pagerState) {
@@ -165,12 +180,6 @@ fun DashboardScreen(
             activeTab = requestedTab
             onTabConsumed()
         }
-    }
-
-    // The quick-add menu belongs to the dashboard tab only; switching tabs (e.g. via the
-    // bottom nav) must dismiss it so it never lingers over another screen.
-    LaunchedEffect(activeTab) {
-        if (activeTab != 0) showQuickAddMenu = false
     }
 
     val dashboardPermissionLauncher = rememberLauncherForActivityResult(
@@ -380,27 +389,6 @@ fun DashboardScreen(
                     }
                 }
             }
-        },
-        floatingActionButton = {
-            if (activeTab == 0) {
-                // Elevated FAB button sitting clearly on top, avoiding any intersection
-                FloatingActionButton(
-                    onClick = { showQuickAddMenu = !showQuickAddMenu },
-                    containerColor = SleekPrimary,
-                    contentColor = Color.White,
-                    shape = CircleShape,
-                    modifier = Modifier
-                        .padding(bottom = 8.dp)
-                        .shadow(12.dp, CircleShape)
-                        .testTag("quick_add_fab")
-                ) {
-                    Icon(
-                        imageVector = if (showQuickAddMenu) Icons.Default.Close else Icons.Default.Add,
-                        contentDescription = "Add Alarm",
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-            }
         }
     ) { innerPadding ->
         // Only let the body-swipe drive location switching on the Dash/Weather tabs;
@@ -441,10 +429,12 @@ fun DashboardScreen(
                                             letterSpacing = 1.2.sp
                                         )
                                     )
+                                    // Compact temp + icon + local time widget (top-right, near the city).
+                                    CompactWeatherTimeWidget(weather = weather, tzOffset = tzOffset)
                                 }
-                                
+
                                 Spacer(modifier = Modifier.height(4.dp))
-                                
+
                                 // Interactive location header: active name (swipeable) + saved-location
                                 // dots + an add (+) button. Swiping or tapping a dot switches location.
                                 LocationHeader(
@@ -458,6 +448,25 @@ fun DashboardScreen(
                                     onAddLocationClick = { showLocationSearchDialog = true },
                                     onManageCitiesClick = onNavigateToManageCities
                                 )
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // Core-concept hero: why the app exists.
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(
+                                        text = viewModel.translate("Wake with the Sun"),
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = SleekActiveText
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = viewModel.translate("Alarms synced to sunrise & sunset at your exact location."),
+                                        fontSize = 12.sp,
+                                        color = SleekMutedText,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                             }
                         }
 
@@ -561,24 +570,23 @@ fun DashboardScreen(
                             }
                         }
 
-                        // 2. SLEEK WEATHER SECTION (Moved lower under the Solar scene!)
-                        item {
-                            Box(modifier = Modifier.fillMaxWidth()) {
-                                SleekWeatherSection(
+                        // Weather/AQI now live exclusively on the WEATHER tab; the DASH header
+                        // shows a compact temp + time widget instead (see CompactWeatherTimeWidget).
+
+                        // TRAVEL on home: active-journey tracker (if any) then an Add Travel Alarm CTA.
+                        if (isTravelTrackingActive) {
+                            item {
+                                JourneyActiveCard(
                                     viewModel = viewModel,
-                                    onChangeLocationClick = { showLocationSearchDialog = true },
-                                    showExtendedData = true
+                                    onClick = { activeTab = 3 }
                                 )
                             }
                         }
-
-                        // 2b. AIR QUALITY (AQI) CARD — shown when air-quality data is available
-                        airQuality?.let { aqi ->
-                            item {
-                                Box(modifier = Modifier.fillMaxWidth()) {
-                                    AirQualityCard(aqi = aqi, viewModel = viewModel)
-                                }
-                            }
+                        item {
+                            AddTravelAlarmCard(
+                                viewModel = viewModel,
+                                onClick = { activeTab = 3 }
+                            )
                         }
 
                         // ADD ALARM BUTTON
@@ -669,7 +677,7 @@ fun DashboardScreen(
                                         if (na != null) {
                                             Switch(
                                                 checked = na.active,
-                                                onCheckedChange = { viewModel.toggleAlarmActive(na) },
+                                                onCheckedChange = { onAlarmToggle(na) },
                                                 colors = SwitchDefaults.colors(
                                                     checkedThumbColor = SleekPrimary,
                                                     checkedTrackColor = Color.White,
@@ -739,7 +747,7 @@ fun DashboardScreen(
                                         )
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            text = viewModel.translate("Tap the '+' floating button in the center below to configure custom or sunrise/sunset-aligned alarms."),
+                                            text = viewModel.translate("Use the Sunrise/Sunset cards above or the Add Standard Alarm button to schedule alarms."),
                                             fontSize = 11.sp,
                                             color = SleekMutedText,
                                             textAlign = TextAlign.Center,
@@ -754,7 +762,7 @@ fun DashboardScreen(
                                     SleekAlarmItemRow(
                                         alarm = alarm,
                                         onRowClick = { onNavigateToEditAlarm(alarm.id) },
-                                        onToggleActive = { viewModel.toggleAlarmActive(alarm) },
+                                        onToggleActive = { onAlarmToggle(alarm) },
                                         onDeleteClick = { viewModel.deleteAlarm(alarm) }
                                     )
                                 }
@@ -798,6 +806,13 @@ fun DashboardScreen(
                                 showExtendedData = true
                             )
                         }
+
+                        // Full AQI card lives on the WEATHER tab.
+                        airQuality?.let { aqi ->
+                            item {
+                                AirQualityCard(aqi = aqi, viewModel = viewModel)
+                            }
+                        }
                     }
                 }
 
@@ -822,85 +837,28 @@ fun DashboardScreen(
                 }
             }
 
-            // Quick Add menu — hosted in a Popup (a separate window) so it always renders
-            // ABOVE the OpenGL solar-system surface, which is drawn on top of the main
-            // window and would otherwise bleed through and cover the menu.
-            if (showQuickAddMenu) {
-                val density = LocalDensity.current
-                Popup(
-                    alignment = Alignment.BottomCenter,
-                    offset = with(density) { IntOffset(0, -(96.dp).roundToPx()) },
-                    onDismissRequest = { showQuickAddMenu = false },
-                    properties = PopupProperties(focusable = true)
-                ) {
-                    AnimatedVisibility(
-                        visible = showQuickAddMenu,
-                        enter = fadeIn(),
-                        exit = fadeOut()
-                    ) {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth(0.85f)
-                                .padding(horizontal = 24.dp)
-                                .shadow(16.dp, RoundedCornerShape(20.dp)),
-                            shape = RoundedCornerShape(20.dp),
-                            colors = CardDefaults.cardColors(containerColor = SleekCardBg),
-                            border = BorderStroke(1.dp, SleekBorder)
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    text = "SCHEDULE NEW ALARM",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.Black,
-                                        color = SleekPrimary,
-                                        letterSpacing = 1.2.sp
-                                    ),
-                                    modifier = Modifier.padding(bottom = 6.dp)
-                                )
-
-                                SleekQuickAddItem(
-                                    text = "Solar Sunrise Awake",
-                                    icon = Icons.Default.WbSunny,
-                                    tint = SleekSolarAccent,
-                                    onClick = {
-                                        showQuickAddMenu = false
-                                        onNavigateToAddAlarm("SUNRISE")
-                                    }
-                                )
-                                Divider(color = SleekBorder.copy(alpha = 0.5f))
-                                SleekQuickAddItem(
-                                    text = "Solar Sunset Reflection",
-                                    icon = Icons.Default.WbTwilight,
-                                    tint = SleekSecondary,
-                                    onClick = {
-                                        showQuickAddMenu = false
-                                        onNavigateToAddAlarm("SUNSET")
-                                    }
-                                )
-                                Divider(color = SleekBorder.copy(alpha = 0.5f))
-                                SleekQuickAddItem(
-                                    text = "Standard Manual Clock",
-                                    icon = Icons.Default.AccessTime,
-                                    tint = Color.LightGray,
-                                    onClick = {
-                                        showQuickAddMenu = false
-                                        onNavigateToAddAlarm("CUSTOM")
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
         }
+    }
+
+    // Skip-vs-turn-off dialog for turning OFF a repeating alarm (D6 / Task 2).
+    skipDialogAlarm?.let { alarm ->
+        SkipOrTurnOffDialog(
+            viewModel = viewModel,
+            onSkip = {
+                viewModel.skipNextOccurrence(alarm)
+                skipDialogAlarm = null
+            },
+            onTurnOff = {
+                viewModel.toggleAlarmActive(alarm)
+                skipDialogAlarm = null
+            },
+            onDismiss = { skipDialogAlarm = null }
+        )
     }
 
     if (showLocationSearchDialog) {
         LocationSearchDialog(
-            initialQuery = locationName,
+            initialQuery = "",
             viewModel = viewModel,
             onUseMyLocationClick = {
                 dashboardPermissionLauncher.launch(
@@ -1088,6 +1046,269 @@ fun SleekAlarmItemRow(
     }
 }
 
+/**
+ * Compact top-right header widget: current temperature + a weather icon + the device-local
+ * time (HH:mm). Falls back gracefully when weather hasn't loaded yet.
+ */
+@Composable
+fun CompactWeatherTimeWidget(
+    weather: com.example.alarm.weather.WeatherInfo?,
+    tzOffset: Double
+) {
+    // Re-tick the displayed time roughly every 30s so HH:mm stays current.
+    var nowTick by remember { mutableStateOf(0L) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowTick = System.currentTimeMillis()
+            kotlinx.coroutines.delay(30_000)
+        }
+    }
+
+    val localTime = remember(nowTick, tzOffset) {
+        try {
+            val zoneOffset = java.time.ZoneOffset.ofTotalSeconds((tzOffset * 3600).toInt())
+            java.time.OffsetDateTime.ofInstant(java.time.Instant.now(), zoneOffset)
+                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+        } catch (e: Exception) {
+            java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .background(SleekCardBg.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+            .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        if (weather != null && !weather.temperatureC.isNaN()) {
+            val (icon, color) = getWeatherIconAndColor(weather.condition, weather.isDay)
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(18.dp)
+            )
+            Text(
+                text = "${weather.temperatureC.toInt()}°",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Black,
+                color = SleekActiveText
+            )
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .height(14.dp)
+                    .background(SleekBorder)
+            )
+        }
+        Text(
+            text = localTime,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = SleekPrimary
+        )
+    }
+}
+
+/**
+ * Compact "Journey Active" tracker shown on the DASH tab while travel tracking is running.
+ * Tapping it opens the full Travel tab.
+ */
+@Composable
+fun JourneyActiveCard(
+    viewModel: AlarmViewModel,
+    onClick: () -> Unit
+) {
+    val distanceKm by viewModel.travelTotalTripDistance.collectAsStateWithLifecycle()
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .border(BorderStroke(0.5.dp, SleekPrimary.copy(alpha = 0.5f)), RoundedCornerShape(20.dp)),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = SleekCardBg)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(SleekPrimary.copy(alpha = 0.15f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Navigation,
+                    contentDescription = null,
+                    tint = SleekPrimary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = viewModel.translate("Journey Active"),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = SleekActiveText
+                )
+                Text(
+                    text = "${viewModel.translate("Tracking")} • ${String.format(Locale.US, "%.1f", distanceKm)} km",
+                    fontSize = 12.sp,
+                    color = SleekSecondary,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = SleekMutedText,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    }
+}
+
+/** "Add Travel Alarm" CTA on the DASH tab that routes the user to the Travel tab. */
+@Composable
+fun AddTravelAlarmCard(
+    viewModel: AlarmViewModel,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .border(BorderStroke(0.5.dp, SleekBorder), RoundedCornerShape(20.dp)),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = SleekCardBg.copy(alpha = 0.85f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(SleekSecondary.copy(alpha = 0.15f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Explore,
+                    contentDescription = null,
+                    tint = SleekSecondary,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = viewModel.translate("Add Travel Alarm"),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = SleekActiveText
+                )
+                Text(
+                    text = viewModel.translate("Get woken when you near your destination."),
+                    fontSize = 12.sp,
+                    color = SleekMutedText,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = null,
+                tint = SleekSecondary,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    }
+}
+
+/**
+ * Dialog shown when a user turns OFF a REPEATING alarm: offers to skip only the next
+ * occurrence (alarm stays active) or turn the alarm off completely.
+ */
+@Composable
+fun SkipOrTurnOffDialog(
+    viewModel: AlarmViewModel,
+    onSkip: () -> Unit,
+    onTurnOff: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(BorderStroke(1.dp, SleekBorder), RoundedCornerShape(20.dp)),
+            color = SleekCardBg,
+            shape = RoundedCornerShape(20.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = viewModel.translate("Turn off this alarm?"),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = SleekActiveText
+                )
+                Text(
+                    text = viewModel.translate("This alarm repeats. Skip just the next occurrence, or turn it off completely?"),
+                    fontSize = 13.sp,
+                    color = SleekMutedText
+                )
+
+                Button(
+                    onClick = onSkip,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = SleekPrimary)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SkipNext,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = Color.White
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(viewModel.translate("Skip today only"), color = Color.White)
+                }
+
+                OutlinedButton(
+                    onClick = onTurnOff,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PowerSettingsNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = SleekActiveText
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(viewModel.translate("Turn off completely"), color = SleekActiveText)
+                }
+
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text(viewModel.translate("Cancel"), color = SleekMutedText)
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun SunCaption(
     label: String,
@@ -1111,26 +1332,6 @@ fun SunCaption(
         Text(
             text = value,
             fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            color = SleekActiveText
-        )
-    }
-}
-
-@Composable
-fun SleekQuickAddItem(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(vertical = 12.dp, horizontal = 6.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(imageVector = icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
-        Spacer(modifier = Modifier.width(14.dp))
-        Text(
-            text = text,
-            fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
             color = SleekActiveText
         )
@@ -1172,11 +1373,13 @@ fun LocationSearchDialog(
     var searchQuery by remember { mutableStateOf(initialQuery) }
     val searchResults by viewModel.searchResults.collectAsStateWithLifecycle()
     val isSearching = searchQuery.isNotEmpty()
-    
+
+    // Open with an empty input (D8 / Task 10): never auto-search the current city. Clear any
+    // stale results from a previous session so the helper hint shows on first open.
     LaunchedEffect(Unit) {
-        if (initialQuery.isNotEmpty()) {
-            // Optional: call searchLocationQuery when dialog opens so matches show up.
-            kotlinx.coroutines.delay(100) // slight delay to allow keyboard controller to mount if needed, or just let user search.
+        if (initialQuery.isEmpty()) {
+            viewModel.searchLocationQuery("")
+        } else {
             viewModel.searchLocationQuery(initialQuery)
         }
     }
