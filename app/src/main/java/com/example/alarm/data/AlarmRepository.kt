@@ -41,10 +41,6 @@ class AlarmRepository(
         return alarmDao.getActiveAlarms()
     }
 
-    suspend fun getActiveAlarmsForLocation(locationName: String): List<Alarm> {
-        return alarmDao.getActiveAlarmsForLocation(locationName)
-    }
-
     suspend fun insertAlarm(alarm: Alarm): Long {
         return alarmDao.insertAlarm(alarm)
     }
