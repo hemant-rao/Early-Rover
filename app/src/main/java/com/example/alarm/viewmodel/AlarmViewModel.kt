@@ -34,7 +34,8 @@ import kotlin.math.abs
 data class RingingAlarmState(
     val id: Int,
     val title: String,
-    val type: String
+    val type: String,
+    val snoozeEnabled: Boolean = true
 )
 
 enum class ThemeMode { LIGHT, DARK, AUTO }
@@ -438,9 +439,28 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshWeather(force: Boolean = false) {
+        // Confine the throttle read/decision, the display-state reset, and weatherJob (re)assignment
+        // to a single thread (Main.immediate). recomputeSunTimes() reaches here both from the init
+        // coroutine on Dispatchers.IO and from setManualCitySelection()/the auto-detect callback on
+        // the main thread; serializing the read-decide-assign sequence means weatherJob?.cancel()
+        // reliably targets the in-flight job and the throttle fields can't be torn between threads.
+        // The actual network fetch still runs on Dispatchers.IO via the inner launch below.
+        viewModelScope.launch(Dispatchers.Main.immediate) refresh@{
         val lat = _latitude.value
         val lng = _longitude.value
         val now = System.currentTimeMillis()
+        // On a genuine location change clear the previous city's display state so a failed/throttled
+        // refetch can't leave the OLD city's temperature/condition/AQI showing under the NEW city's
+        // name. The UI then renders its loading/empty state instead of mislabeled stale data. Skip
+        // this when the coords match the last fetch (a forced refresh of the same city keeps data).
+        if (lastWeatherFetchMs != 0L &&
+            (abs(lat - lastWeatherLat) >= WEATHER_THROTTLE_EPSILON ||
+                abs(lng - lastWeatherLng) >= WEATHER_THROTTLE_EPSILON)
+        ) {
+            _weather.value = null
+            _detailedWeather.value = null
+            _airQuality.value = null
+        }
         if (!force &&
             // Gate on the bookkeeping itself (set after ANY successful primary fetch, detailed OR the
             // lightweight fetchCurrent fallback) rather than _detailedWeather, so a current-only fetch
@@ -450,7 +470,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             abs(lat - lastWeatherLat) < WEATHER_THROTTLE_EPSILON &&
             abs(lng - lastWeatherLng) < WEATHER_THROTTLE_EPSILON
         ) {
-            return
+            return@refresh
         }
         _isWeatherLoading.value = true
         // Cancel any in-flight fetch so a superseded (older-city) request can't write stale results.
@@ -504,6 +524,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             } finally {
                 _isWeatherLoading.value = false
             }
+        }
         }
     }
 
@@ -894,9 +915,59 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    /**
+     * One-shot "use my location" fix for the TRAVEL start field ONLY.
+     *
+     * Unlike [triggerAutoLocationDetect] this MUST NOT hijack the dashboard's active location:
+     * it does not mutate _latitude/_longitude/_timezoneOffset/_locationName/_savedCities and never
+     * calls recomputeSunTimes(). The result is delivered exclusively through [onResult].
+     *
+     * LocationHelper.requestCurrentLocation's deeper paths (processLocation / IP fallback) gate on
+     * isAutoDetectEnabled() and saveLocation() the persisted prefs, so for a user who has pinned a
+     * manual city (auto-detect = false) we (a) snapshot the prior persisted location + auto-detect
+     * flag, (b) temporarily enable auto-detect so the one-shot fix is allowed through, then
+     * (c) restore BOTH the persisted location and the auto-detect flag once a result/failure lands.
+     * The ViewModel's location StateFlows are never touched, so the dashboard's pinned city, sun
+     * times, weather, and active pager page all stay exactly as the user left them.
+     */
+    fun triggerTravelStartLocation(onResult: (Double, Double, String) -> Unit) {
+        val priorAutoDetect = locationHelper.isAutoDetectEnabled()
+        val priorLat = locationHelper.getSavedLatitude()
+        val priorLng = locationHelper.getSavedLongitude()
+        val priorOffset = locationHelper.getSavedTimezoneOffset()
+        val priorName = locationHelper.getSavedLocationName()
+
+        fun restorePrior() {
+            // Undo any saveLocation() the lookup paths performed and put the auto-detect flag back,
+            // so this travel-only fix leaves zero global side effects.
+            locationHelper.saveLocation(priorLat, priorLng, priorOffset, priorName)
+            locationHelper.setAutoDetect(priorAutoDetect)
+        }
+
+        _isDetectingLocation.value = true
+        // Temporarily allow the gated fallback paths to run for this one-shot fix only.
+        if (!priorAutoDetect) locationHelper.setAutoDetect(true)
+
+        locationHelper.requestCurrentLocation(
+            onSuccess = { lat, lng, _, name ->
+                restorePrior()
+                if (cleared) return@requestCurrentLocation
+                _isDetectingLocation.value = false
+                // Deliver ONLY to the travel screen; do not touch active-location state.
+                onResult(lat, lng, name)
+            },
+            onFailure = { e ->
+                restorePrior()
+                if (cleared) return@requestCurrentLocation
+                _isDetectingLocation.value = false
+                Log.e("AlarmViewModel", "Travel start one-shot location failed", e)
+            }
+        )
+    }
+
     // Alarm Trigger Ring interactions
-    fun setRingingState(id: Int, title: String, type: String) {
-        _ringingAlarm.value = RingingAlarmState(id, title, type)
+    fun setRingingState(id: Int, title: String, type: String, snoozeEnabled: Boolean = true) {
+        _ringingAlarm.value = RingingAlarmState(id, title, type, snoozeEnabled)
     }
 
     fun stopRingingAlarmAndDismiss() {
@@ -993,6 +1064,25 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         current.remove(city)
         _savedCities.value = current
         saveCitiesToPrefs(current)
+
+        // Reconcile the alarms table: SUNRISE/SUNSET (and tagged CUSTOM) alarms are bound to a city
+        // via their own coordinates and are resolved/scheduled against THOSE coords, never the active
+        // city. If we leave them behind, a deleted city's alarms keep firing at its sun times yet no
+        // longer match alarmsForCurrentLocation for any visible city — the user would be woken by an
+        // alarm for a city they deleted with no on-screen record. Cancel + delete those orphans so a
+        // deleted city leaves no orphaned ringing alarms.
+        viewModelScope.launch(Dispatchers.IO) {
+            val all = repository.allAlarms.first()
+            for (alarm in all) {
+                if (alarm.hasLocation() &&
+                    abs(alarm.latitude - city.latitude) < SAME_CITY_EPSILON &&
+                    abs(alarm.longitude - city.longitude) < SAME_CITY_EPSILON
+                ) {
+                    scheduler.cancel(alarm)
+                    repository.deleteAlarm(alarm)
+                }
+            }
+        }
 
         // If we deleted the active city, reselect a remaining one so lat/lng/tz/loc_name stay
         // consistent with the list (otherwise the app keeps pointing at the deleted city).

@@ -400,6 +400,11 @@ class AlarmService : Service() {
                         putExtra("ALARM_ID", alarmId)
                         putExtra("ALARM_TITLE", "$title (Snoozed)")
                         putExtra("ALARM_TYPE", type)
+                        // Carry the snooze flag for consistency with every other arming path so the
+                        // re-fired ring's initial notification renders correctly before the async DB
+                        // lookup. (Always true here given the line-391 guard; the async re-post at
+                        // lines 176-186 is what closes a mid-flight snooze-disable window.)
+                        putExtra("ALARM_SNOOZE_ENABLED", alarm?.snoozeEnabled ?: true)
                         // Preserve the dual-ring identity so the re-fire comes back as the same ring
                         // (correct notificationId & request-code bias) instead of collapsing onto the base ring.
                         putExtra("IS_EXACT_ALSO", isExactAlso)
@@ -416,10 +421,29 @@ class AlarmService : Service() {
                     val triggerAtMillis = System.currentTimeMillis() + (snoozeTimeMinutes * 60 * 1000)
                     val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
 
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
-                    } else {
-                        alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                    // Mirror AlarmScheduler.scheduleFallback: if exact-alarm access has been revoked
+                    // (Play stripping USE_EXACT_ALARM, or an OEM build) the exact call throws
+                    // SecurityException on this coroutine and the snooze would be silently lost.
+                    // Pre-check on API 31+ and always wrap in try/catch so we degrade to an inexact
+                    // (but allow-while-idle) alarm rather than dropping the snooze entirely.
+                    val canExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        alarmManager.canScheduleExactAlarms()
+                    } else true
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && canExact) {
+                            alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            alarmManager.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                        } else {
+                            alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                        }
+                    } catch (se: SecurityException) {
+                        Log.w("AlarmService", "Exact snooze not permitted; falling back to inexact", se)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            alarmManager.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                        } else {
+                            alarmManager.set(android.app.AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                        }
                     }
                     Log.d("AlarmService", "Snoozed alarm $alarmId for $snoozeTimeMinutes minutes")
                 } finally {
@@ -447,6 +471,10 @@ class AlarmService : Service() {
                 putExtra("RINGING_ALARM_ID", alarmId)
                 putExtra("RINGING_ALARM_TITLE", title)
                 putExtra("RINGING_ALARM_TYPE", type)
+                // Thread the snooze flag into the full-screen ring so its UI matches the notification:
+                // a snooze-disabled alarm must NOT show a Snooze button (tapping it would be a silent
+                // no-op, since AlarmService.snoozeAlarm defensively rejects a disabled-snooze alarm).
+                putExtra("RINGING_ALARM_SNOOZE_ENABLED", snoozeEnabled)
             }
         } else null
 

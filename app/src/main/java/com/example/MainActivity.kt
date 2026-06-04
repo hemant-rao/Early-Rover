@@ -167,6 +167,7 @@ class MainActivity : ComponentActivity() {
                     AlarmRingScreen(
                         title = ringingState!!.title,
                         type = ringingState!!.type,
+                        snoozeEnabled = ringingState!!.snoozeEnabled,
                         onDismiss = {
                             val isTravel = ringingState!!.type == "TRAVEL"
                             viewModel.stopRingingAlarmAndDismiss()
@@ -323,7 +324,10 @@ class MainActivity : ComponentActivity() {
             val id = intent.getIntExtra("RINGING_ALARM_ID", -1)
             val title = intent.getStringExtra("RINGING_ALARM_TITLE") ?: "Alarm Clock"
             val type = intent.getStringExtra("RINGING_ALARM_TYPE") ?: "CUSTOM"
-            model.setRingingState(id, title, type)
+            // Carry the alarm's snooze flag so the full-screen ring matches the notification: a
+            // snooze-disabled alarm must not show a Snooze button (tapping it would silently no-op).
+            val snoozeEnabled = intent.getBooleanExtra("RINGING_ALARM_SNOOZE_ENABLED", true)
+            model.setRingingState(id, title, type, snoozeEnabled)
 
             // Remember this was an alarm launch so dismissing the ring screen on a cold
             // start lands on the dashboard instead of replaying the splash animation.

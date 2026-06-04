@@ -103,35 +103,14 @@ fun TravelAlarmScreen(
     var startLat by remember { mutableStateOf("") }
     var startLng by remember { mutableStateOf("") }
 
-    // GPS detection state for the "use my location" button in the start field.
-    // The permission/detection is async, so coordinates are not available
-    // synchronously on click; this flag lets a LaunchedEffect fill them in once ready.
+    // GPS detection state for the "use my location" button in the start field. The permission/
+    // detection is async; awaitingGpsForStart drives the icon spinner until the dedicated one-shot
+    // travel-start fix delivers a result via its callback (see startGpsPermissionLauncher below).
+    // We deliberately do NOT read viewModel.latitude/longitude/locationName here: those are the
+    // GLOBAL active-location StateFlows, and the FROM field must never hijack the dashboard's active
+    // city. The result is delivered ONLY through triggerTravelStartLocation's callback.
     var awaitingGpsForStart by remember { mutableStateOf(false) }
-    val gpsLatitude by viewModel.latitude.collectAsStateWithLifecycle()
-    val gpsLongitude by viewModel.longitude.collectAsStateWithLifecycle()
-    val gpsLocationName by viewModel.locationName.collectAsStateWithLifecycle()
     val isDetectingLocation by viewModel.isDetectingLocation.collectAsStateWithLifecycle()
-
-    // Only fill the start fields once a genuinely fresh GPS fix has completed
-    // (i.e. detection transitioned from running -> finished), so we don't copy
-    // the stale pre-existing dashboard/default location into the FROM field.
-    var startGpsDetectionWasRunning by remember { mutableStateOf(false) }
-    LaunchedEffect(awaitingGpsForStart, isDetectingLocation, gpsLatitude, gpsLongitude) {
-        if (!awaitingGpsForStart) {
-            startGpsDetectionWasRunning = false
-            return@LaunchedEffect
-        }
-        if (isDetectingLocation) {
-            startGpsDetectionWasRunning = true
-        } else if (startGpsDetectionWasRunning && gpsLatitude != 0.0 && gpsLongitude != 0.0) {
-            // Detection finished with a valid fix.
-            startLabel = if (gpsLocationName.isNotEmpty()) gpsLocationName else "My Location"
-            startLat = gpsLatitude.toString()
-            startLng = gpsLongitude.toString()
-            awaitingGpsForStart = false
-            startGpsDetectionWasRunning = false
-        }
-    }
 
     // Remote lookup parameters
     var searchQuery by remember { mutableStateOf("") }
@@ -154,15 +133,22 @@ fun TravelAlarmScreen(
         }
     }
 
-    // Dedicated launcher for the inline "My Location" button in the start (FROM)
-    // field. It must request a FRESH GPS fix and must NOT start travel tracking.
+    // Dedicated launcher for the inline "My Location" button in the start (FROM) field. It requests
+    // a FRESH one-shot GPS fix, fills ONLY the start fields, and must NOT start travel tracking nor
+    // mutate the dashboard's active city / auto-detect mode. triggerTravelStartLocation delivers the
+    // fix exclusively via its callback; we ignore the global active-location StateFlows entirely.
     val startGpsPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
         val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
         if (fineGranted || coarseGranted) {
-            viewModel.triggerAutoLocationDetect()
+            viewModel.triggerTravelStartLocation { lat, lng, name ->
+                startLabel = if (name.isNotEmpty()) name else "My Location"
+                startLat = lat.toString()
+                startLng = lng.toString()
+                awaitingGpsForStart = false
+            }
         } else {
             awaitingGpsForStart = false
         }
