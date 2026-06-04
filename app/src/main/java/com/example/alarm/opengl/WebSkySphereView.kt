@@ -9,7 +9,6 @@ import android.webkit.WebViewClient
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
@@ -29,12 +28,19 @@ fun WebSkySphereView(
     val sunriseHour = sunriseTime.hour + sunriseTime.minute / 60.0f
     val sunsetHour = sunsetTime.hour + sunsetTime.minute / 60.0f
 
+    // Tracks whether the HTML page has finished loading and exposed
+    // window.updateSolarTimes(). update() must not run JS before this is set,
+    // otherwise evaluateJavascript would no-op or error against a missing global.
+    val pageReady = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
+
     AndroidView(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
             WebView(ctx).apply {
                 settings.javaScriptEnabled = true
-                settings.allowFileAccess = true
+                // Loading from file:///android_asset/ does not require broad file
+                // access; keep it disabled to shrink the WebView attack surface.
+                settings.allowFileAccess = false
                 settings.domStorageEnabled = true
                 settings.useWideViewPort = true
                 settings.loadWithOverviewMode = true
@@ -53,6 +59,7 @@ fun WebSkySphereView(
                 addJavascriptInterface(object {
                     @JavascriptInterface
                     fun onHtmlReady() {
+                        pageReady.set(true)
                         val script = String.format(
                             Locale.US,
                             "javascript:window.updateSolarTimes(%f, %f, %f, %b);",
@@ -66,12 +73,16 @@ fun WebSkySphereView(
             }
         },
         update = { webView ->
-            val script = String.format(
-                Locale.US,
-                "javascript:window.updateSolarTimes(%f, %f, %f, %b);",
-                currentHour, sunriseHour, sunsetHour, isDark
-            )
-            webView.evaluateJavascript(script, null)
+            // Only push updates once the page has loaded and exposed the global
+            // function; otherwise the JS call would target a non-existent symbol.
+            if (pageReady.get()) {
+                val script = String.format(
+                    Locale.US,
+                    "javascript:window.updateSolarTimes(%f, %f, %f, %b);",
+                    currentHour, sunriseHour, sunsetHour, isDark
+                )
+                webView.evaluateJavascript(script, null)
+            }
         }
     )
 }

@@ -73,7 +73,9 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
         // Transparent surface so the animated weather sky shows through behind it.
         setEGLConfigChooser(8, 8, 8, 8, 16, 0)
         holder.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
-        setZOrderOnTop(true)
+        // Compose inside the window (not above it) so the surface clips to its
+        // 380dp Box, scrolls with the LazyColumn, and lets dialogs draw above it.
+        setZOrderMediaOverlay(true)
         setRenderer(renderer)
         renderMode = RENDERMODE_WHEN_DIRTY
         renderer.updatePositions(LocalDateTime.now())

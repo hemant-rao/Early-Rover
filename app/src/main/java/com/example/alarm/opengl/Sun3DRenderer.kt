@@ -153,26 +153,44 @@ class Sun3DRenderer : GLSurfaceView.Renderer {
             val ringColor = if (isDarkMode) floatArrayOf(0.2f, 0.4f, 0.8f, 0.3f) else floatArrayOf(0.7f, 0.8f, 0.9f, 0.5f)
             drawCoords(ringBuffer!!, GLES20.GL_LINE_STRIP, ringVertexCount, ringColor)
 
-            // 2. DRAW NOON (Golden Sun Position on Dial)
-            val noonAngle = - (currentHour / 24.0f) * 360.0f + 90f + rotationAngle
-            drawMarkerOnRing(noonAngle, 0.16f, floatArrayOf(0.98f, 0.80f, 0.20f, 1.0f)) // bright sun
+            // 2. DRAW NOW (Golden Sun Position on Dial)
+            // Encode current time as a fraction of the daylight span (sunrise -> sunset),
+            // not a raw 24h clock, so the sun sweeps the full ring across the day.
+            val nowAngle = - dayFraction(currentHour) * 360.0f + 90f + rotationAngle
+            drawMarkerOnRing(nowAngle, 0.16f, floatArrayOf(0.98f, 0.80f, 0.20f, 1.0f)) // bright sun
 
-            // 3. DRAW SUNRISE INDICATOR (Sunburst Gold)
-            val sunriseAngle = - (sunriseHour / 24.0f) * 360.0f + 90f + rotationAngle
+            // 3. DRAW SUNRISE INDICATOR (Sunburst Gold) -> start of daylight span (fraction 0)
+            val sunriseAngle = - dayFraction(sunriseHour) * 360.0f + 90f + rotationAngle
             drawMarkerOnRing(sunriseAngle, 0.11f, floatArrayOf(0.96f, 0.50f, 0.10f, 0.9f)) // sunrise gold
 
-            // 4. DRAW SUNSET INDICATOR (Crimson Orange)
-            val sunsetAngle = - (sunsetHour / 24.0f) * 360.0f + 90f + rotationAngle
+            // 4. DRAW SUNSET INDICATOR (Crimson Orange) -> end of daylight span (fraction 1)
+            val sunsetAngle = - dayFraction(sunsetHour) * 360.0f + 90f + rotationAngle
             drawMarkerOnRing(sunsetAngle, 0.11f, floatArrayOf(0.90f, 0.20f, 0.15f, 0.9f)) // sunset crimson
 
             // 5. DRAW ACTIVE ALARMS (Aura Violet / Teal)
             for (i in alarmHours.indices) {
-                val alarmDegree = - (alarmHours[i] / 24.0f) * 360.0f + 90f + rotationAngle
+                val alarmDegree = - dayFraction(alarmHours[i]) * 360.0f + 90f + rotationAngle
                 drawMarkerOnRing(alarmDegree, 0.08f, floatArrayOf(0.12f, 0.82f, 0.72f, 1.0f)) // vibrant teal
             }
         } catch (e: Exception) {
             Log.e("Sun3DRenderer", "onDrawFrame failed gracefully: ", e)
         }
+    }
+
+    /**
+     * Normalizes an hour-of-day to its position within the daylight span.
+     * Returns 0f at sunrise and 1f at sunset so markers encode the daylight
+     * fraction (per spec) rather than a raw 24h clock angle. Handles a
+     * cross-midnight daylight span and guards against an empty (sunrise == sunset)
+     * span to avoid division by zero.
+     */
+    private fun dayFraction(hour: Float): Float {
+        var span = sunsetHour - sunriseHour
+        if (span < 0f) span += 24f // daylight crosses midnight
+        if (span == 0f) return 0f  // degenerate span: avoid divide-by-zero
+        var delta = hour - sunriseHour
+        if (delta < 0f) delta += 24f
+        return delta / span
     }
 
     private fun drawMarkerOnRing(angleDeg: Float, scale: Float, color: FloatArray) {
@@ -224,33 +242,25 @@ class Sun3DRenderer : GLSurfaceView.Renderer {
     }
 
     private fun setupMarkerCoords() {
-        // Create simple 3D Diamond / Octahedron pointer mesh coordinates
-        val coords = floatArrayOf(
-            0.0f,  1.0f,  0.0f, // Top point
-            1.0f,  0.0f,  1.0f, // Base midpoints
-           -1.0f,  0.0f,  1.0f,
-           -1.0f,  0.0f, -1.0f,
-            1.0f,  0.0f, -1.0f,
-            1.0f,  0.0f,  1.0f, // repeat starting point to close
-            0.0f, -1.0f,  0.0f  // Bottom point
-        )
-
-        // Make composite geometry with multiple triangular subdivisions
+        // Build a flat polygonal bead as a GL_TRIANGLE_FAN laid in the XZ plane so it
+        // matches the orientation of the timeline ring (also in XZ). Emitting (x, 0, z)
+        // makes the disc face up toward the camera at (0, 2.5, 4) instead of standing
+        // edge-on as a thin vertical sliver in the XY plane.
         val pointerCoords = ArrayList<Float>()
-        
-        // Let's create an elegant polygonal bead shape using simple trig values
+
+        // Center point for GL_TRIANGLE_FAN.
         pointerCoords.add(0.0f)
         pointerCoords.add(0.0f)
-        pointerCoords.add(0.0f) // center point for GL_TRIANGLE_FAN
-        
+        pointerCoords.add(0.0f)
+
         val radialPoints = 16
         for (i in 0..radialPoints) {
             val theta = i * (2.0 * Math.PI) / radialPoints
             val x = cos(theta).toFloat()
-            val y = sin(theta).toFloat()
+            val z = sin(theta).toFloat()
             pointerCoords.add(x)
-            pointerCoords.add(y)
-            pointerCoords.add(0.0f) // flat diamond shape on face
+            pointerCoords.add(0.0f) // flat disc lying in the XZ plane (matches ring)
+            pointerCoords.add(z)
         }
 
         markerVertexCount = pointerCoords.size / 3
