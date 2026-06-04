@@ -271,12 +271,19 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
 
                 // Proximity threshold penetrated! Set.add(id) returns false if already fired,
                 // so each arrival triggers exactly once instead of on every location update.
-                // Gate firing on accuracy so we don't false-trigger on a jittery fix, but scale
-                // the gate to the radius: a coarse fix well inside a large radius can still wake
-                // the user. A missing accuracy reading is treated as acceptable.
-                val gateMeters = minOf(50.0, alarm.radiusKm * 1000.0 * 0.25)
-                val accurateEnough = !location.hasAccuracy() || location.accuracy <= gateMeters
-                if (distance <= alarm.radiusKm && accurateEnough && triggeredAlarmIds.add(alarm.id)) {
+                // Jitter protection without a hard accuracy cap: a fix counts as "inside" when
+                // its entire accuracy confidence circle fits within the radius (so a coarse
+                // 100-200 m urban/transit fix that is clearly inside still wakes the user),
+                // OR when accuracy is missing. As a safety net for small radii where the
+                // containment test would be too strict, also fire once the user is well inside
+                // (half the radius). This scales correctly with the radius, unlike the old
+                // 50 m cap which never let a coarse fix trigger.
+                val radiusMeters = alarm.radiusKm * 1000.0
+                val distanceMeters = distance * 1000.0
+                val withinRadius = !location.hasAccuracy() ||
+                    (distanceMeters + location.accuracy) <= radiusMeters ||
+                    distance <= alarm.radiusKm * 0.5
+                if (distance <= alarm.radiusKm && withinRadius && triggeredAlarmIds.add(alarm.id)) {
                     triggerArrivalAlarm(alarm, distance)
                 }
             }
@@ -583,7 +590,12 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
             return START_NOT_STICKY
         }
 
-        return START_STICKY
+        // This is a user-controlled location sentry with an explicit Start/Stop UI. Do NOT
+        // return START_STICKY: that would let the OS resurrect a location-tracking foreground
+        // service (re-acquiring GPS + the persistent notification) after a process kill even
+        // though the user never asked for it to restart. START_NOT_STICKY keeps the service
+        // strictly under user control.
+        return START_NOT_STICKY
     }
 
     // Defensive teardown shared by the explicit STOP action and onDestroy. Every step is

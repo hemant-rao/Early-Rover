@@ -13,6 +13,7 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class CityInfo(
     val name: String,
@@ -111,9 +112,18 @@ class LocationHelper(private val context: Context) {
 
                     if (provider != null) {
                         val timeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                        // Guard so exactly one of processLocation / fetchIPLocationFallback ever
+                        // runs even if the fix arrives at ~15s and races the timeout runnable.
+                        val completed = AtomicBoolean(false)
                         val singleListener = object : android.location.LocationListener {
                             override fun onLocationChanged(location: Location) {
+                                if (!completed.compareAndSet(false, true)) return
                                 timeoutHandler.removeCallbacksAndMessages(null)
+                                try {
+                                    locationManager.removeUpdates(this)
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
                                 processLocation(location, onSuccess, onFailure)
                             }
                             @Deprecated("Deprecated in Java")
@@ -125,6 +135,7 @@ class LocationHelper(private val context: Context) {
                         // If no fix arrives within 15s, stop listening (avoids a leaked listener)
                         // and route to the IP-based fallback so the caller is not left hanging.
                         timeoutHandler.postDelayed({
+                            if (!completed.compareAndSet(false, true)) return@postDelayed
                             try {
                                 locationManager.removeUpdates(singleListener)
                             } catch (e: Exception) {
@@ -207,14 +218,18 @@ class LocationHelper(private val context: Context) {
                 }
                 throw Exception("IP Geolocation API response not valid")
             } catch (e: Exception) {
-                // Secondary fallback API: ip-api
+                // Secondary fallback API: freeipapi.com (keyless, HTTPS-capable).
+                // ip-api.com free tier is HTTP-only and is blocked by Android's default
+                // cleartext policy on API 28+, so it can never succeed without relaxing
+                // cleartext globally; freeipapi serves the same data over HTTPS.
                 try {
-                    val url2 = URL("http://ip-api.com/json")
+                    val url2 = URL("https://freeipapi.com/api/json")
                     val connection2 = url2.openConnection() as HttpURLConnection
                     connection2.requestMethod = "GET"
                     connection2.connectTimeout = 3000
                     connection2.readTimeout = 3000
-                    
+                    connection2.setRequestProperty("User-Agent", "SolarAlarmApp")
+
                     val rCode = connection2.responseCode
                     if (rCode == HttpURLConnection.HTTP_OK) {
                         val reader2 = BufferedReader(InputStreamReader(connection2.inputStream))
@@ -224,30 +239,28 @@ class LocationHelper(private val context: Context) {
                             response2.append(line2)
                         }
                         reader2.close()
-                        
+
                         val json2 = JSONObject(response2.toString())
-                        if (json2.optString("status") == "success") {
-                            val lat = json2.optDouble("lat", 0.0)
-                            val lng = json2.optDouble("lon", 0.0)
-                            val city = json2.optString("city", "")
-                            val country = json2.optString("countryCode", "")
-                            
-                            val timezoneOffset = Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
-                            val name = if (city.isNotEmpty() && country.isNotEmpty()) {
-                                "$city, $country"
-                            } else if (city.isNotEmpty()) {
-                                city
-                            } else {
-                                "Auto Network Location"
+                        val lat = json2.optDouble("latitude", 0.0)
+                        val lng = json2.optDouble("longitude", 0.0)
+                        val city = json2.optString("cityName", "")
+                        val country = json2.optString("countryCode", "")
+
+                        val timezoneOffset = Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
+                        val name = if (city.isNotEmpty() && country.isNotEmpty()) {
+                            "$city, $country"
+                        } else if (city.isNotEmpty()) {
+                            city
+                        } else {
+                            "Auto Network Location"
+                        }
+
+                        if (lat != 0.0 || lng != 0.0) {
+                            saveLocation(lat, lng, timezoneOffset, name)
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                onSuccess(lat, lng, timezoneOffset, name)
                             }
-                            
-                            if (lat != 0.0 || lng != 0.0) {
-                                saveLocation(lat, lng, timezoneOffset, name)
-                                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                    onSuccess(lat, lng, timezoneOffset, name)
-                                }
-                                return@Thread
-                            }
+                            return@Thread
                         }
                     }
                 } catch (pe: Exception) {
