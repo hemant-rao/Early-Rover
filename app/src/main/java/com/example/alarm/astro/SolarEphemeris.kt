@@ -1,5 +1,6 @@
 package com.example.alarm.astro
 
+import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 import kotlin.math.atan2
@@ -60,7 +61,21 @@ object SolarEphemeris {
      * The Sun is index 0 with radius 0.
      */
     fun compute(time: LocalDateTime): List<Body> {
-        val d = daysSinceEpoch(time)
+        // The LocalDateTime overload interprets its wall-clock fields as UTC.
+        // Prefer compute(Instant) to avoid the local-time-as-UTC ambiguity.
+        return computeForDays(daysSinceEpoch(time))
+    }
+
+    /**
+     * Returns Sun + all planets for the given instant, ordered inner-to-outer.
+     * This overload is unambiguous: the instant is a true point on the UTC
+     * timeline, so the Schlyter day number matches the UT-based theory exactly.
+     */
+    fun compute(instant: Instant): List<Body> {
+        return computeForDays(daysSinceEpoch(instant))
+    }
+
+    private fun computeForDays(d: Double): List<Body> {
         val result = ArrayList<Body>(9)
         result.add(Body("Sun", 0.0, 0.0))
 
@@ -129,10 +144,19 @@ object SolarEphemeris {
         return Body("Earth", atan2(-ys, -xs), r)
     }
 
+    // Epoch is 1999-12-31 00:00 UT (Schlyter's day number 0).
+    private val epochSeconds =
+        LocalDateTime.of(1999, 12, 31, 0, 0).toEpochSecond(ZoneOffset.UTC)
+
     private fun daysSinceEpoch(time: LocalDateTime): Double {
-        // Epoch is 1999-12-31 00:00 UT (Schlyter's day number 0).
-        val epoch = LocalDateTime.of(1999, 12, 31, 0, 0)
-        val seconds = time.toEpochSecond(ZoneOffset.UTC) - epoch.toEpochSecond(ZoneOffset.UTC)
+        // Wall-clock fields are interpreted as UTC (see compute(LocalDateTime)).
+        val seconds = time.toEpochSecond(ZoneOffset.UTC) - epochSeconds
+        return seconds / 86400.0
+    }
+
+    private fun daysSinceEpoch(instant: Instant): Double {
+        // Use millisecond precision so the day number tracks the true instant.
+        val seconds = instant.toEpochMilli() / 1000.0 - epochSeconds
         return seconds / 86400.0
     }
 

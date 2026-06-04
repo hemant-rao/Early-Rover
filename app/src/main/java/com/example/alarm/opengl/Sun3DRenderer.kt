@@ -40,6 +40,33 @@ class Sun3DGLView(context: Context) : GLSurfaceView(context) {
 
     val sunRenderer = Sun3DRenderer()
 
+    private var isRenderingActive = false
+
+    // Self-rescheduling ~20 FPS ticker so the decorative ring spin doesn't run the
+    // GL thread at the device's full refresh rate (which doubled GPU/compositor load
+    // against the throttled sibling planet surface). Mirrors SolarSystemGLView.
+    private val renderTicker = object : Runnable {
+        override fun run() {
+            if (isRenderingActive) {
+                requestRender()
+                postDelayed(this, 50L) // Peaceful ~20 FPS
+            }
+        }
+    }
+
+    private fun startRenderLoop() {
+        if (!isRenderingActive) {
+            isRenderingActive = true
+            removeCallbacks(renderTicker)
+            post(renderTicker)
+        }
+    }
+
+    private fun stopRenderLoop() {
+        isRenderingActive = false
+        removeCallbacks(renderTicker)
+    }
+
     init {
         setEGLContextClientVersion(2)
         // Transparent surface so any weather/sky backdrop shows through behind the ring.
@@ -47,7 +74,29 @@ class Sun3DGLView(context: Context) : GLSurfaceView(context) {
         holder.setFormat(PixelFormat.TRANSLUCENT)
         setZOrderMediaOverlay(true)
         setRenderer(sunRenderer)
-        renderMode = RENDERMODE_CONTINUOUSLY // ring rotates + sun sweeps across the day
+        // Throttled redraw (WHEN_DIRTY + ~20 FPS ticker) instead of CONTINUOUSLY so
+        // the two stacked GL surfaces don't both run unbounded.
+        renderMode = RENDERMODE_WHEN_DIRTY
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        startRenderLoop()
+    }
+
+    override fun onDetachedFromWindow() {
+        stopRenderLoop()
+        super.onDetachedFromWindow()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        startRenderLoop()
+    }
+
+    override fun onPause() {
+        stopRenderLoop()
+        super.onPause()
     }
 
     /** Update the daylight span, current time and active alarms drawn on the ring. */
@@ -63,6 +112,9 @@ class Sun3DGLView(context: Context) : GLSurfaceView(context) {
         sunRenderer.currentHour = now.hour + now.minute / 60.0f
         sunRenderer.alarmHours = alarms.map { it.hour + it.minute / 60.0f }
         sunRenderer.isDarkMode = dark
+        // RENDERMODE_WHEN_DIRTY: repaint so data changes are reflected even if the
+        // ticker hasn't fired yet.
+        requestRender()
     }
 }
 
@@ -79,7 +131,11 @@ fun Sun3DView(
     sunriseTime: LocalTime = LocalTime.of(6, 0),
     sunsetTime: LocalTime = LocalTime.of(18, 0),
     activeAlarms: List<LocalTime> = emptyList(),
-    isDark: Boolean = isSystemInDarkTheme()
+    isDark: Boolean = isSystemInDarkTheme(),
+    // "now" in the ACTIVE LOCATION's timezone. Callers in a different device TZ
+    // (travel/multi-city) should pass the location-local time so the marker lands
+    // on the correct fraction of the daylight span. Defaults to device wall clock.
+    now: LocalTime = LocalTime.now()
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     var glView by remember { mutableStateOf<Sun3DGLView?>(null) }
@@ -88,12 +144,12 @@ fun Sun3DView(
         modifier = modifier.fillMaxSize(),
         factory = { ctx ->
             Sun3DGLView(ctx).also {
-                it.setTimes(sunriseTime, sunsetTime, LocalTime.now(), activeAlarms, isDark)
+                it.setTimes(sunriseTime, sunsetTime, now, activeAlarms, isDark)
                 glView = it
             }
         },
         update = {
-            it.setTimes(sunriseTime, sunsetTime, LocalTime.now(), activeAlarms, isDark)
+            it.setTimes(sunriseTime, sunsetTime, now, activeAlarms, isDark)
         }
     )
 
@@ -229,12 +285,11 @@ class Sun3DRenderer : GLSurfaceView.Renderer {
             // Rotate sphere over time for dynamic ambient atmosphere
             rotationAngle = (rotationAngle + 0.3f) % 360f
 
-            // Theme colors
-            if (isDarkMode) {
-                GLES20.glClearColor(0.04f, 0.05f, 0.08f, 1.0f) // Deep celestial navy
-            } else {
-                GLES20.glClearColor(0.95f, 0.96f, 0.98f, 1.00f) // Clean slate white
-            }
+            // Transparent clear: this is the top overlay surface stacked above the
+            // heliocentric planet view, so the planet scene (and the Compose themed
+            // backdrop behind both GL surfaces) must show through behind the ring.
+            // A themed/opaque clear here would occlude the entire planet scene.
+            GLES20.glClearColor(0f, 0f, 0f, 0f)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
 
             // Camera position (Perspective 3D view and tilt)
@@ -265,8 +320,13 @@ class Sun3DRenderer : GLSurfaceView.Renderer {
             // 2. DRAW NOW (Golden Sun Position on Dial)
             // Encode current time as a fraction of the daylight span (sunrise -> sunset),
             // not a raw 24h clock, so the sun sweeps the full ring across the day.
-            val nowAngle = - dayFraction(currentHour) * 360.0f + 90f + rotationAngle
-            drawMarkerOnRing(nowAngle, 0.16f, floatArrayOf(0.98f, 0.80f, 0.20f, 1.0f)) // bright sun
+            // Only draw the marker during daylight (fraction within 0..1); at night the
+            // fraction exceeds the span and would mis-encode the time on the daylight arc.
+            val nowFrac = dayFraction(currentHour)
+            if (nowFrac in 0f..1f) {
+                val nowAngle = -nowFrac * 360.0f + 90f + rotationAngle
+                drawMarkerOnRing(nowAngle, 0.16f, floatArrayOf(0.98f, 0.80f, 0.20f, 1.0f)) // bright sun
+            }
 
             // 3. DRAW SUNRISE INDICATOR (Sunburst Gold) -> start of daylight span (fraction 0)
             val sunriseAngle = - dayFraction(sunriseHour) * 360.0f + 90f + rotationAngle
