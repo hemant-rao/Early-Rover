@@ -423,7 +423,9 @@ fun AddEditAlarmScreen(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     val activeDays = alarm.getRepeatDaysList()
-                    val daysOfWeek = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+                    // Unambiguous two-letter day labels so Tue/Thu and Sat/Sun don't both
+                    // collapse to "T"/"S". Localized via translate() like the rest of the screen.
+                    val shortDays = listOf("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -459,7 +461,7 @@ fun AddEditAlarmScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = daysOfWeek[i - 1].substring(0, 1),
+                                    text = viewModel.translate(shortDays[i - 1]),
                                     color = if (active) Color.White else SleekMutedText,
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 14.sp

@@ -32,7 +32,8 @@ fun AlarmRingScreen(
     title: String,
     type: String,
     onDismiss: () -> Unit,
-    onSnooze: () -> Unit
+    onSnooze: () -> Unit,
+    translate: (String) -> String = { it }
 ) {
     // Breathing/Pulse animation for active ring
     val infiniteTransition = rememberInfiniteTransition(label = "Solar Flare Glow")
@@ -123,7 +124,7 @@ fun AlarmRingScreen(
 
             // 2. ALARM TITLE INFO
             Text(
-                text = if (type == "TRAVEL") "SECURE ARRIVAL SENTRY DETECTED" else "SOLARIS ALERT TRIGGERED",
+                text = if (type == "TRAVEL") translate("SECURE ARRIVAL SENTRY DETECTED") else translate("SOLARIS ALERT TRIGGERED"),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Black,
                 color = primaryGlow,
@@ -133,7 +134,7 @@ fun AlarmRingScreen(
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = title.ifEmpty { "Dynamic Daylight Call" },
+                text = title.ifEmpty { translate("Dynamic Daylight Call") },
                 fontSize = 32.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,
@@ -144,10 +145,10 @@ fun AlarmRingScreen(
             Spacer(modifier = Modifier.height(6.dp))
 
             val eventSummary = when (type) {
-                "SUNRISE" -> "Solar Sunrise Synchronized Alarm"
-                "SUNSET" -> "Solar Sunset Synchronized Alarm"
-                "TRAVEL" -> "Wayfarer Transit Arrival Security"
-                else -> "Standard Trigger Clock"
+                "SUNRISE" -> translate("Solar Sunrise Synchronized Alarm")
+                "SUNSET" -> translate("Solar Sunset Synchronized Alarm")
+                "TRAVEL" -> translate("Wayfarer Transit Arrival Security")
+                else -> translate("Standard Trigger Clock")
             }
 
             Text(
@@ -179,7 +180,7 @@ fun AlarmRingScreen(
                     shape = RoundedCornerShape(20.dp)
                 ) {
                     Text(
-                        text = if (type == "TRAVEL") "ARRIVED - DISMISS ALARM" else "DISMISS ALARM",
+                        text = if (type == "TRAVEL") translate("ARRIVED - DISMISS ALARM") else translate("DISMISS ALARM"),
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Black,
                         color = Color.White,
@@ -206,7 +207,7 @@ fun AlarmRingScreen(
                         Icon(imageVector = Icons.Default.Snooze, contentDescription = null, tint = SleekMutedText)
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "SNOOZE WAKE",
+                            text = translate("SNOOZE WAKE"),
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.sp

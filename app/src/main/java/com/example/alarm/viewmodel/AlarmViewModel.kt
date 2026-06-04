@@ -47,6 +47,17 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     private val locationHelper = LocationHelper(application)
     private var searchJob: kotlinx.coroutines.Job? = null
 
+    // Declared ABOVE the init block: init transitively writes these (via recomputeSunTimes ->
+    // refreshWeather / recalculateAndScheduleActiveAlarms). Kotlin runs property initializers and
+    // init blocks strictly top-to-bottom, so declaring them after init would reset the Job handles
+    // assigned during the initial pass back to null, making that first fetch/recalc un-cancellable.
+    // Weather refetch throttle: skip if we recently fetched for ~the same coordinates.
+    private var lastWeatherFetchMs = 0L
+    private var lastWeatherLat = Double.NaN
+    private var lastWeatherLng = Double.NaN
+    private var weatherJob: Job? = null
+    private var recalcJob: Job? = null
+
     // Guards async location callbacks from mutating StateFlows after the ViewModel is destroyed.
     @Volatile private var cleared = false
 
@@ -142,9 +153,6 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     // System Settings preferences
     private val settingsPrefs = application.getSharedPreferences("sun_alarm_settings_prefs", Context.MODE_PRIVATE)
-    
-    private val _darkThemeEnabled = MutableStateFlow(settingsPrefs.getBoolean("dark_theme", true))
-    val darkThemeEnabled: StateFlow<Boolean> = _darkThemeEnabled.asStateFlow()
 
     // Adaptive theme mode. Defaults derive from the legacy "dark_theme" flag for back-compat.
     private val _themeMode = MutableStateFlow(
@@ -163,7 +171,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setThemeMode(m: ThemeMode) {
         _themeMode.value = m
-        settingsPrefs.edit().putString("theme_mode", m.name).apply()
+        // Drop the now-orphaned legacy "dark_theme" key so its stale value can't linger and drift
+        // from the new "theme_mode" source of truth.
+        settingsPrefs.edit().putString("theme_mode", m.name).remove("dark_theme").apply()
     }
 
     /** Resolves the active theme: AUTO follows daylight at the location; DARK/LIGHT are explicit. */
@@ -262,6 +272,17 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "Auto" to "ऑटो",
         "Render dark celestial color profiles" to "गहरे खगोलीय रंग प्रोफ़ाइल दिखाएं",
         "Applying language…" to "भाषा लागू की जा रही है…",
+        // Full-screen alarm ring screen
+        "SOLARIS ALERT TRIGGERED" to "सोलारिस अलर्ट सक्रिय",
+        "SECURE ARRIVAL SENTRY DETECTED" to "सुरक्षित आगमन सेंट्री पहचाना",
+        "Dynamic Daylight Call" to "डायनेमिक डेलाइट कॉल",
+        "Solar Sunrise Synchronized Alarm" to "सौर सूर्योदय समकालिक अलार्म",
+        "Solar Sunset Synchronized Alarm" to "सौर सूर्यास्त समकालिक अलार्म",
+        "Wayfarer Transit Arrival Security" to "यात्रा आगमन सुरक्षा",
+        "Standard Trigger Clock" to "मानक ट्रिगर घड़ी",
+        "DISMISS ALARM" to "अलार्म खारिज करें",
+        "ARRIVED - DISMISS ALARM" to "पहुँच गए - अलार्म खारिज करें",
+        "SNOOZE WAKE" to "स्नूज़ करें",
         "Default Snooze Duration" to "डिफ़ॉल्ट स्नूज़ समय",
         "Select Language" to "भाषा चुनें (Language)",
         "Only English & Hindi are fully translated; other languages change date/number format only." to "केवल अंग्रेज़ी और हिंदी का पूरा अनुवाद उपलब्ध है; अन्य भाषाएँ केवल तारीख/संख्या प्रारूप बदलती हैं।",
@@ -301,7 +322,18 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "Select Alarm Tone" to "अलार्म टोन चुनें",
         "Alarm Tone" to "अलार्म टोन",
         "Default Alarm" to "डिफ़ॉल्ट अलार्म",
-        "Default Alarm Sound" to "डिफ़ॉल्ट अलार्म ध्वनि"
+        "Default Alarm Sound" to "डिफ़ॉल्ट अलार्म ध्वनि",
+        // Settings reliability / about section (wrapped in translate() in SettingsScreen).
+        "ALARM SYSTEM RELIABILITY GUIDES" to "अलार्म विश्वसनीयता मार्गदर्शिका",
+        "Battery Optimizations Exclusions" to "बैटरी ऑप्टिमाइज़ेशन अपवाद",
+        "To guarantee the alarm triggers precisely on-time when the physical screen is off, newer Android versions require excluding the app from system-level battery optimizations." to "स्क्रीन बंद होने पर अलार्म ठीक समय पर बजे, इसके लिए नए Android संस्करणों में ऐप को सिस्टम-स्तरीय बैटरी ऑप्टिमाइज़ेशन से बाहर रखना आवश्यक है।",
+        "Go to system App Info -> Battery -> and select 'Unrestricted' for completely uninterrupted wake alarm service." to "सिस्टम App Info -> Battery पर जाएं और निर्बाध अलार्म सेवा के लिए 'Unrestricted' (अप्रतिबंधित) चुनें।",
+        "System Exact Alarm Permission" to "सिस्टम सटीक अलार्म अनुमति",
+        "Solari uses System Alarm Clock info APIs which list upcoming alerts on your lockscreen and bypass Silent / Do Not Disturb boundaries." to "Solari सिस्टम अलार्म क्लॉक API का उपयोग करता है जो आने वाले अलार्म लॉकस्क्रीन पर दिखाते हैं और साइलेंट / डू नॉट डिस्टर्ब सीमाओं को पार करते हैं।",
+        "If scheduled warnings seem deactivated, ensure 'Alarms & Reminders' permission is granted in the device settings panel." to "यदि निर्धारित अलार्म निष्क्रिय लगें, तो डिवाइस सेटिंग्स में 'Alarms & Reminders' अनुमति चालू होना सुनिश्चित करें।",
+        "SOLARIS ALARM COMPASS" to "सोलारिस अलार्म कम्पास",
+        "Version 1.0.0 (Concept Edition)" to "संस्करण 1.0.0 (कॉन्सेप्ट संस्करण)",
+        "Developed using modern Jetpack Compose, Room reactive databases, Alarm Clock APIs, and hardware-accelerated OpenGL ES 2.0 visualization." to "आधुनिक Jetpack Compose, Room रिएक्टिव डेटाबेस, Alarm Clock API और हार्डवेयर-त्वरित OpenGL ES 2.0 विज़ुअलाइज़ेशन का उपयोग करके विकसित।"
     )
 
     // --- TRAVEL / DESTINATION ARRIVAL ALARM SYSTEMS (Declared early to avoid initialization NPE in init) ---
@@ -378,12 +410,6 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Weather refetch throttle: skip if we recently fetched for ~the same coordinates.
-    private var lastWeatherFetchMs = 0L
-    private var lastWeatherLat = Double.NaN
-    private var lastWeatherLng = Double.NaN
-    private var weatherJob: Job? = null
-
     fun refreshWeather(force: Boolean = false) {
         val lat = _latitude.value
         val lng = _longitude.value
@@ -391,8 +417,8 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         if (!force &&
             _detailedWeather.value != null &&
             now - lastWeatherFetchMs < 10 * 60 * 1000 &&
-            abs(lat - lastWeatherLat) < 0.05 &&
-            abs(lng - lastWeatherLng) < 0.05
+            abs(lat - lastWeatherLat) < WEATHER_THROTTLE_EPSILON &&
+            abs(lng - lastWeatherLng) < WEATHER_THROTTLE_EPSILON
         ) {
             return
         }
@@ -405,7 +431,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 val detailed = WeatherRepository.fetchDetailed(lat, lng)
                 // Staleness guard: if the active city changed while the network call was in flight,
                 // drop these results so we don't overwrite current-city data or poison the throttle.
-                if (abs(_latitude.value - lat) > 0.05 || abs(_longitude.value - lng) > 0.05) {
+                if (abs(_latitude.value - lat) > WEATHER_THROTTLE_EPSILON ||
+                    abs(_longitude.value - lng) > WEATHER_THROTTLE_EPSILON
+                ) {
                     return@launch
                 }
                 if (detailed != null) {
@@ -427,7 +455,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 // Only advance the throttle bookkeeping when a primary fetch actually succeeded; on a
                 // total failure leave it untouched so the next call can retry immediately.
                 if (primaryOk) {
-                    lastWeatherFetchMs = now
+                    // Record COMPLETION time (not the start-time `now`) so the 10-minute throttle
+                    // window measures from when the fetch finished, not when it was requested.
+                    lastWeatherFetchMs = System.currentTimeMillis()
                     lastWeatherLat = lat
                     lastWeatherLng = lng
                 }
@@ -532,8 +562,6 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-
-    private var recalcJob: Job? = null
 
     /**
      * Recomputes the clock time of every active SUNRISE/SUNSET alarm and (re)schedules it.
@@ -690,9 +718,16 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 recalced
             }
 
-            val savedId = repository.insertAlarm(finalAlarm)
-            // insertAlarm uses REPLACE: a brand-new row returns its new id; an edited row keeps its id.
-            val schedulerTarget = finalAlarm.copy(id = savedId.toInt())
+            // Editing an existing row -> @Update (true in-place update); a brand-new row -> @Insert.
+            // Using insert(REPLACE) for edits would delete+reinsert the row, silently wiping any future
+            // FK ON DELETE CASCADE children and diverging from the updateAlarm path used everywhere else.
+            val schedulerTarget = if (finalAlarm.id != 0) {
+                repository.updateAlarm(finalAlarm)
+                finalAlarm
+            } else {
+                val savedId = repository.insertAlarm(finalAlarm)
+                finalAlarm.copy(id = savedId.toInt())
+            }
             scheduler.schedule(schedulerTarget)
 
             editingAlarm.value = null
@@ -741,8 +776,8 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 val current = _savedCities.value.toMutableList()
                 val newCity = CityInfo(name, "Detected", lat, lng, offset)
                 
-                // Only add if not already present
-                val existingIndex = current.indexOfFirst { it.name == name || (abs(it.latitude - lat) < SAME_CITY_EPSILON && abs(it.longitude - lng) < SAME_CITY_EPSILON) }
+                // Only add if not already present (shared dedup rule with addSavedCity).
+                val existingIndex = current.indexOfFirst { it.sameCityAs(newCity) }
                 if (existingIndex != -1) {
                     current[existingIndex] = newCity
                 } else {
@@ -808,16 +843,18 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Setting management preferences
-    fun toggleDarkThemeSetting() {
-        val toggled = !_darkThemeEnabled.value
-        _darkThemeEnabled.value = toggled
-        settingsPrefs.edit().putBoolean("dark_theme", toggled).apply()
-    }
-
     fun setDefaultSnoozeMinutes(minutes: Int) {
         _defaultSnoozeMinutes.value = minutes
         settingsPrefs.edit().putInt("default_snooze", minutes).apply()
     }
+
+    // Shared "same city" predicate so the add-path and the auto-detect path coalesce identically:
+    // name match OR coordinate proximity within SAME_CITY_EPSILON. Without this the add-path dedups
+    // by name only while detect dedups by name-or-coords, allowing duplicate pager pages for one place.
+    private fun CityInfo.sameCityAs(other: CityInfo): Boolean =
+        name.equals(other.name, ignoreCase = true) ||
+            (abs(latitude - other.latitude) < SAME_CITY_EPSILON &&
+                abs(longitude - other.longitude) < SAME_CITY_EPSILON)
 
     // SAVED LOCATIONS STORAGE & MANAGEMENT
     private fun saveCitiesToPrefs(list: List<CityInfo>) {
@@ -832,7 +869,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addSavedCity(city: CityInfo) {
         val current = _savedCities.value.toMutableList()
-        if (!current.any { it.name.lowercase() == city.name.lowercase() }) {
+        if (current.none { it.sameCityAs(city) }) {
             current.add(city)
             _savedCities.value = current
             saveCitiesToPrefs(current)
@@ -841,6 +878,11 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteSavedCity(city: CityInfo) {
+        // Never delete the last remaining city: the app always needs an active location. The UI also
+        // hides/disables Delete on the last row, so this is a defensive no-op rather than the old
+        // "remove then silently re-add the same item" which left the city deleted-but-still-present.
+        if (_savedCities.value.size <= 1) return
+
         // Identify the active city by coordinates (display names like "Delhi, IN" / "GPS: .." / "Auto
         // IP Location" rarely equal the stored CityInfo.name), falling back to name equality.
         val wasActive =
@@ -851,11 +893,6 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         val current = _savedCities.value.toMutableList()
         // Remove only the first exact match
         current.remove(city)
-
-        // Ensure at least one city remains
-        if (current.isEmpty()) {
-            current.add(city)
-        }
         _savedCities.value = current
         saveCitiesToPrefs(current)
 
@@ -908,5 +945,10 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         // Single shared definition of "same city" used by both the per-location alarm filter and the
         // auto-detect dedup, so list visibility and detection agree (~1.1 km at the equator).
         const val SAME_CITY_EPSILON = 0.01
+
+        // Weather refetch dedup/staleness radius (~550 m). Deliberately <= SAME_CITY_EPSILON so two
+        // nearby saved cities (adjacent metros/airports) are not collapsed onto one city's cached
+        // weather/AQI when the user switches between them.
+        const val WEATHER_THROTTLE_EPSILON = 0.005
     }
 }

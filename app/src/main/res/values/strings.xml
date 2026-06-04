@@ -1,3 +1,11 @@
 <resources>
     <string name="app_name">Solar Alarm</string>
+
+    <!-- Notification channel: active sunrise/sunset alarms (AlarmService) -->
+    <string name="channel_alarm_name">Sunrise Sunset Active Alarms</string>
+    <string name="channel_alarm_description">Rings and alerts when alarm thresholds are matched</string>
+
+    <!-- Notification channel: travel tracking foreground service (TravelTrackingService) -->
+    <string name="channel_travel_name">Travel Intelligent Watchdog</string>
+    <string name="channel_travel_description">Keeps secure location tracking active while commuter is resting</string>
 </resources>

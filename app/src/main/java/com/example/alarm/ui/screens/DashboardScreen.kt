@@ -482,21 +482,18 @@ fun DashboardScreen(
                                             )
                                     )
 
-                                    androidx.compose.animation.AnimatedVisibility(
-                                        visible = !showLocationSearchDialog,
-                                        enter = fadeIn(),
-                                        exit = fadeOut()
-                                    ) {
-                                        Celestial3DView(
-                                            modifier = Modifier.fillMaxSize(),
-                                            sunriseTime = sunrise,
-                                            sunsetTime = sunset,
-                                            activeAlarms = alarms.filter { it.active }.map { Pair(it.hour, it.minute) },
-                                            isDark = darkTheme,
-                                            animateOrbits = true,
-                                            onPlanetSelected = { selectedPlanet = it }
-                                        )
-                                    }
+                                    // The search dialog is now a real Dialog window that renders
+                                    // above the OpenGL surface, so the 3D scene no longer needs to be
+                                    // torn down/recreated when the dialog opens.
+                                    Celestial3DView(
+                                        modifier = Modifier.fillMaxSize(),
+                                        sunriseTime = sunrise,
+                                        sunsetTime = sunset,
+                                        activeAlarms = alarms.filter { it.active }.map { Pair(it.hour, it.minute) },
+                                        isDark = darkTheme,
+                                        animateOrbits = true,
+                                        onPlanetSelected = { selectedPlanet = it }
+                                    )
                                 }
 
                                 Row(
@@ -668,10 +665,11 @@ fun DashboardScreen(
                                             )
                                         }
 
-                                        if (nextAlarm != null) {
+                                        val na = nextAlarm
+                                        if (na != null) {
                                             Switch(
-                                                checked = nextAlarm!!.active,
-                                                onCheckedChange = { viewModel.toggleAlarmActive(nextAlarm!!) },
+                                                checked = na.active,
+                                                onCheckedChange = { viewModel.toggleAlarmActive(na) },
                                                 colors = SwitchDefaults.colors(
                                                     checkedThumbColor = SleekPrimary,
                                                     checkedTrackColor = Color.White,
@@ -1212,30 +1210,22 @@ fun LocationSearchDialog(
         }
     }
 
-    // Capture device Back Button presses to close the overlay cleanly
-    androidx.activity.compose.BackHandler(onBack = onDismiss)
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.5f))
-            .clickable(
-                onClick = onDismiss,
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ),
-        contentAlignment = Alignment.TopCenter
+    // Host the search UI in a real Dialog window so it renders ABOVE the native OpenGL
+    // solar-system surface (which is drawn on top of the main window and would otherwise
+    // bleed through normal composition). The Dialog also provides the scrim, back handling,
+    // outside-tap dismissal, and proper WindowInsets/IME handling for free.
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.TopCenter
+        ) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 56.dp, start = 16.dp, end = 16.dp, bottom = 16.dp)
-                .clickable(
-                    enabled = true,
-                    onClick = {}, // Prevent clicks inside the dialog content from propagating and closing it
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                )
                 .border(BorderStroke(1.dp, SleekBorder), shape = RoundedCornerShape(20.dp))
                 .shadow(16.dp, RoundedCornerShape(20.dp)),
             color = SleekCardBg,
@@ -1415,6 +1405,7 @@ fun LocationSearchDialog(
                     )
                 }
             }
+        }
         }
     }
 }
@@ -1631,7 +1622,8 @@ fun SleekWeatherSection(
                                             color = SleekMutedText,
                                             textAlign = TextAlign.Center
                                         )
-                                        val (icon, color) = getWeatherIconAndColor(hour.condition, isIsoTimeDaytime(hour.timeIso))
+                                        val hourDay = weather.dailyList.firstOrNull { it.dateIso == hour.timeIso.substringBefore("T") }
+                                        val (icon, color) = getWeatherIconAndColor(hour.condition, isIsoTimeDaytime(hour.timeIso, hourDay?.sunriseIso, hourDay?.sunsetIso))
                                         Icon(
                                             imageVector = icon,
                                             contentDescription = null,
@@ -1805,7 +1797,7 @@ fun WeatherDaysList(
                                     fontSize = 7.sp,
                                     color = SleekMutedText
                                 )
-                                val (hIcon, hCol) = getWeatherIconAndColor(hour.condition, isIsoTimeDaytime(hour.timeIso))
+                                val (hIcon, hCol) = getWeatherIconAndColor(hour.condition, isIsoTimeDaytime(hour.timeIso, day.sunriseIso, day.sunsetIso))
                                 Icon(
                                     imageVector = hIcon,
                                     contentDescription = null,
@@ -2033,6 +2025,26 @@ fun isIsoTimeDaytime(isoTime: String): Boolean {
         hour in 6..17
     } catch(e: Exception) {
         true
+    }
+}
+
+/**
+ * Decides day vs. night for a forecast hour using the real sunrise/sunset window when both
+ * bounds are available, falling back to the coarse 6..17 heuristic when they can't be parsed.
+ * This is correct at high latitudes / other timezones where the fixed 6-17 band is wrong.
+ */
+fun isIsoTimeDaytime(isoTime: String, sunriseIso: String?, sunsetIso: String?): Boolean {
+    return try {
+        val time = java.time.LocalDateTime.parse(isoTime)
+        val sunrise = sunriseIso?.let { java.time.LocalDateTime.parse(it) }
+        val sunset = sunsetIso?.let { java.time.LocalDateTime.parse(it) }
+        if (sunrise != null && sunset != null) {
+            time >= sunrise && time < sunset
+        } else {
+            isIsoTimeDaytime(isoTime)
+        }
+    } catch (e: Exception) {
+        isIsoTimeDaytime(isoTime)
     }
 }
 
