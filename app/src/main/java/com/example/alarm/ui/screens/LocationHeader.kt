@@ -99,6 +99,7 @@ fun LocationHeader(
         }
         LaunchedEffect(pagerState, savedCities) {
             snapshotFlow { pagerState.currentPage }
+                .drop(1)
                 .collect { page ->
                     val c = savedCities.getOrNull(page) ?: return@collect
                     val matches = locationName.equals(c.name, true)

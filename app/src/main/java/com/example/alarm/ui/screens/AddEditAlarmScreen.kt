@@ -56,7 +56,12 @@ fun AddEditAlarmScreen(
         if (alarmId != null) {
             val existing = allAlarms.find { it.id == alarmId }
             when {
-                existing != null -> viewModel.editingAlarm.value = existing
+                // Seed the scratchpad once per alarmId. Room re-emits `allAlarms` on ANY write
+                // to the table (e.g. RescheduleReceiver recalibrating sun alarms, the scheduler
+                // persisting a skipDate, toggling another alarm), which re-runs this effect. Only
+                // (re)seed when the scratchpad isn't already this alarm so a concurrent emission
+                // can't silently clobber the user's in-progress, unsaved edits with the stale copy.
+                existing != null -> if (viewModel.editingAlarm.value?.id != alarmId) viewModel.editingAlarm.value = existing
                 // List has loaded but this id is genuinely gone (e.g. deleted elsewhere):
                 // clear any stale scratchpad left over from a prior screen and leave.
                 allAlarms.isNotEmpty() -> {
@@ -381,7 +386,9 @@ fun AddEditAlarmScreen(
                                     com.example.alarm.data.SunAlarmResolver.Location(
                                         alarm.latitude, alarm.longitude, alarm.timezoneOffset, alarm.locationName
                                     ),
-                                    java.time.LocalDate.now(),
+                                    java.time.LocalDate.now(
+                                        com.example.alarm.data.SunAlarmResolver.zoneOf(alarm.timezoneOffset)
+                                    ),
                                     alarm.offsetMinutes
                                 ).toLocalTime()
                             } else {

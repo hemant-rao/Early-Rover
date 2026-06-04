@@ -298,6 +298,12 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "Once" to "एक बार",
         "Mon-Fri" to "सोम-शुक्र",
         "Custom" to "कस्टम",
+        "Sunrise" to "सूर्योदय",
+        "Sunset" to "सूर्यास्त",
+        "Add Standard Alarm" to "मानक अलार्म जोड़ें",
+        "Use the Sunrise/Sunset cards above or the Add Standard Alarm button to schedule alarms." to "अलार्म सेट करने के लिए ऊपर सूर्योदय/सूर्यास्त कार्ड या मानक अलार्म जोड़ें बटन का उपयोग करें।",
+        "Type city name..." to "शहर का नाम लिखें...",
+        "ACTIVE LOCATIONS HUB" to "सक्रिय स्थान केंद्र",
         "Default Snooze Duration" to "डिफ़ॉल्ट स्नूज़ समय",
         "Select Language" to "भाषा चुनें (Language)",
         "Only English & Hindi are fully translated; other languages change date/number format only." to "केवल अंग्रेज़ी और हिंदी का पूरा अनुवाद उपलब्ध है; अन्य भाषाएँ केवल तारीख/संख्या प्रारूप बदलती हैं।",
@@ -407,9 +413,15 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             _savedCities.value = list
         }
 
-        recomputeSunTimes()
         observeAlarmsForUpcoming()
-        backfillUnboundAlarms()
+        // Serialize the one-time backfill BEFORE the recalc pass so the same legacy/unbound rows are
+        // never written by two concurrent IO coroutines. Backfill binds the active location onto every
+        // unbound alarm; recompute's recalc then runs as the FINAL write, recalibrating hour/minute on
+        // any now-bound active sun alarm (backfill only copies coordinates, not the recalibrated time).
+        viewModelScope.launch(Dispatchers.IO) {
+            backfillUnboundAlarms()
+            recomputeSunTimes()
+        }
 
         // Auto-stop travel tracking service if there are no travel alarms remaining
         viewModelScope.launch {
@@ -430,7 +442,10 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         val lng = _longitude.value
         val now = System.currentTimeMillis()
         if (!force &&
-            _detailedWeather.value != null &&
+            // Gate on the bookkeeping itself (set after ANY successful primary fetch, detailed OR the
+            // lightweight fetchCurrent fallback) rather than _detailedWeather, so a current-only fetch
+            // still engages the 10-minute throttle. lastWeatherFetchMs == 0L lets the first fetch run.
+            lastWeatherFetchMs != 0L &&
             now - lastWeatherFetchMs < 10 * 60 * 1000 &&
             abs(lat - lastWeatherLat) < WEATHER_THROTTLE_EPSILON &&
             abs(lng - lastWeatherLng) < WEATHER_THROTTLE_EPSILON
@@ -464,6 +479,14 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 // Air quality for the same coordinates (null-safe; leaves prior value on failure).
                 val aqi = WeatherRepository.fetchAirQuality(lat, lng)
+                // Re-apply the staleness guard before writing: the AQI request can finish after the
+                // user switches cities, and unlike the detailed fetch above there was no second check,
+                // so the old city's AQI could overwrite the new active city's display.
+                if (abs(_latitude.value - lat) > WEATHER_THROTTLE_EPSILON ||
+                    abs(_longitude.value - lng) > WEATHER_THROTTLE_EPSILON
+                ) {
+                    return@launch
+                }
                 if (aqi != null) {
                     _airQuality.value = aqi
                 }
@@ -559,21 +582,19 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
      * no recorded location (pre-binding legacy rows, or rows whose binding failed). Without this such
      * alarms match the per-location filter in EVERY city and appear duplicated across all cities.
      */
-    private fun backfillUnboundAlarms() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val all = repository.allAlarms.first()
-            val active = currentActiveLocation()
-            for (alarm in all) {
-                if (!alarm.hasLocation()) {
-                    repository.updateAlarm(
-                        alarm.copy(
-                            locationName = active.name,
-                            latitude = active.latitude,
-                            longitude = active.longitude,
-                            timezoneOffset = active.timezoneOffset
-                        )
+    private suspend fun backfillUnboundAlarms() {
+        val all = repository.allAlarms.first()
+        val active = currentActiveLocation()
+        for (alarm in all) {
+            if (!alarm.hasLocation()) {
+                repository.updateAlarm(
+                    alarm.copy(
+                        locationName = active.name,
+                        latitude = active.latitude,
+                        longitude = active.longitude,
+                        timezoneOffset = active.timezoneOffset
                     )
-                }
+                )
             }
         }
     }
@@ -764,15 +785,26 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             // active city — so tag a brand-new/unbound custom alarm with the active location to keep
             // it visible. An already-bound custom alarm keeps its own city on edit (mirrors the sun
             // path), so "set alarm for city A, switch to city B" no longer reassigns it to B.
-            val finalAlarm = if (recalced.alarmType == "CUSTOM" && !recalced.hasLocation()) {
-                recalced.copy(
+            // Normalize the title: trim surrounding whitespace and fall back to a type-appropriate
+            // default if it's blank (or whitespace-only). Without this a blank/all-spaces title is
+            // saved verbatim and shown in the notification / full-screen ring.
+            val normalizedTitle = recalced.title.trim().ifBlank {
+                when (recalced.alarmType) {
+                    "SUNRISE" -> "Sunrise Alarm"
+                    "SUNSET" -> "Sunset Alarm"
+                    else -> "Alarm"
+                }
+            }
+            val titled = recalced.copy(title = normalizedTitle)
+            val finalAlarm = if (titled.alarmType == "CUSTOM" && !titled.hasLocation()) {
+                titled.copy(
                     locationName = _locationName.value,
                     latitude = _latitude.value,
                     longitude = _longitude.value,
                     timezoneOffset = _timezoneOffset.value
                 )
             } else {
-                recalced
+                titled
             }
 
             // Editing an existing row -> @Update (true in-place update); a brand-new row -> @Insert.
@@ -793,6 +825,11 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     // Location settings actions
     fun setManualCitySelection(city: CityInfo) {
+        // Abort any pending auto-detect FIRST: this sets LocationHelper's `cancelled` flag before its
+        // success/failure (and the IP fallbacks) can reach saveLocation(), so a late-arriving detected
+        // location can't persist over the manual choice the user is making here.
+        locationHelper.cancelLocationRequest()
+        _isDetectingLocation.value = false
         locationHelper.setAutoDetect(false)
         locationHelper.saveLocation(city.latitude, city.longitude, city.timezoneOffset, city.name)
         
@@ -822,6 +859,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         locationHelper.requestCurrentLocation(
             onSuccess = { lat, lng, offset, name ->
                 if (cleared) return@requestCurrentLocation
+                // Bail if the user switched to a manual city while this detect was in flight, so a late
+                // callback can't clobber their selection (sun times / weather / active city).
+                if (!locationHelper.isAutoDetectEnabled()) return@requestCurrentLocation
                 _isDetectingLocation.value = false
                 _latitude.value = lat
                 _longitude.value = lng
@@ -847,6 +887,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             },
             onFailure = { e ->
                 if (cleared) return@requestCurrentLocation
+                if (!locationHelper.isAutoDetectEnabled()) return@requestCurrentLocation
                 _isDetectingLocation.value = false
                 Log.e("AlarmViewModel", "Failed to detect automatic GPS location", e)
             }

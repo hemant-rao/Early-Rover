@@ -33,6 +33,7 @@ fun AlarmRingScreen(
     type: String,
     onDismiss: () -> Unit,
     onSnooze: () -> Unit,
+    snoozeEnabled: Boolean = true,
     translate: (String) -> String = { it }
 ) {
     // Breathing/Pulse animation for active ring
@@ -188,8 +189,8 @@ fun AlarmRingScreen(
                     )
                 }
 
-                // SNOOZE CALL (OUTLINED SLEEK BUTTON - HIDDEN IN TRAVEL MODE FOR SAFETY)
-                if (type != "TRAVEL") {
+                // SNOOZE CALL (OUTLINED SLEEK BUTTON - HIDDEN IN TRAVEL MODE OR WHEN SNOOZE DISABLED)
+                if (type != "TRAVEL" && snoozeEnabled) {
                     OutlinedButton(
                         onClick = onSnooze,
                         modifier = Modifier

@@ -298,7 +298,7 @@ fun SettingsScreen(
 
             // 3. WAKELOCK / PERMISSIONS COMPREHENSIVE GUIDELINES
             Text(
-                text = "ALARM SYSTEM RELIABILITY GUIDES",
+                text = viewModel.translate("ALARM SYSTEM RELIABILITY GUIDES"),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 color = SleekSecondary,
@@ -322,15 +322,15 @@ fun SettingsScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(imageVector = Icons.Default.Warning, contentDescription = null, tint = Color(0xFFEF4444), modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text("Battery Optimizations Exclusions", fontWeight = FontWeight.Bold, color = Color(0xFFEF4444), fontSize = 15.sp)
+                        Text(viewModel.translate("Battery Optimizations Exclusions"), fontWeight = FontWeight.Bold, color = Color(0xFFEF4444), fontSize = 15.sp)
                     }
                     Text(
-                        text = "To guarantee the alarm triggers precisely on-time when the physical screen is off, newer Android versions require excluding the app from system-level battery optimizations.",
+                        text = viewModel.translate("To guarantee the alarm triggers precisely on-time when the physical screen is off, newer Android versions require excluding the app from system-level battery optimizations."),
                         fontSize = 12.sp,
                         color = SleekMutedText
                     )
                     Text(
-                        text = "Go to system App Info -> Battery -> and select 'Unrestricted' for completely uninterrupted wake alarm service.",
+                        text = viewModel.translate("Go to system App Info -> Battery -> and select 'Unrestricted' for completely uninterrupted wake alarm service."),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(0xFFEF4444)
@@ -352,15 +352,15 @@ fun SettingsScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(imageVector = Icons.Default.LockPerson, contentDescription = null, tint = SleekSecondary, modifier = Modifier.size(20.dp))
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text("System Exact Alarm Permission", fontWeight = FontWeight.Bold, color = SleekActiveText, fontSize = 15.sp)
+                        Text(viewModel.translate("System Exact Alarm Permission"), fontWeight = FontWeight.Bold, color = SleekActiveText, fontSize = 15.sp)
                     }
                     Text(
-                        text = "Solari uses System Alarm Clock info APIs which list upcoming alerts on your lockscreen and bypass Silent / Do Not Disturb boundaries.",
+                        text = viewModel.translate("Solari uses System Alarm Clock info APIs which list upcoming alerts on your lockscreen and bypass Silent / Do Not Disturb boundaries."),
                         fontSize = 12.sp,
                         color = SleekMutedText
                     )
                     Text(
-                        text = "If scheduled warnings seem deactivated, ensure 'Alarms & Reminders' permission is granted in the device settings panel.",
+                        text = viewModel.translate("If scheduled warnings seem deactivated, ensure 'Alarms & Reminders' permission is granted in the device settings panel."),
                         fontSize = 12.sp,
                         color = SleekMutedText,
                         fontWeight = FontWeight.Medium
@@ -383,7 +383,7 @@ fun SettingsScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = "SOLARIS ALARM COMPASS",
+                        text = viewModel.translate("SOLARIS ALARM COMPASS"),
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                         color = SleekSolarAccent,
@@ -391,13 +391,13 @@ fun SettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Version 1.0.0 (Concept Edition)",
+                        text = viewModel.translate("Version 1.0.0 (Concept Edition)"),
                         fontSize = 11.sp,
                         color = SleekMutedText
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
-                        text = "Developed using modern Jetpack Compose, Room reactive databases, Alarm Clock APIs, and hardware-accelerated OpenGL ES 2.0 visualization.",
+                        text = viewModel.translate("Developed using modern Jetpack Compose, Room reactive databases, Alarm Clock APIs, and hardware-accelerated OpenGL ES 2.0 visualization."),
                         fontSize = 12.sp,
                         textAlign = TextAlign.Center,
                         color = SleekMutedText,

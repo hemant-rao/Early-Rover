@@ -44,6 +44,15 @@ import com.example.ui.theme.*
 import kotlinx.coroutines.launch
 import java.util.Locale
 
+// Shared radius range so the create/edit dialog slider and the per-card slider
+// always span the same values. Using different ranges previously caused a
+// long-radius (e.g. 50 km) geofence to be visually pinned and then silently
+// shrunk the moment the user touched the card slider.
+private val TRAVEL_RADIUS_MIN = 0.5f
+private val TRAVEL_RADIUS_MAX = 50.0f
+private val TRAVEL_RADIUS_RANGE = TRAVEL_RADIUS_MIN..TRAVEL_RADIUS_MAX
+private const val TRAVEL_RADIUS_STEPS = 99
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TravelAlarmScreen(
@@ -74,6 +83,9 @@ fun TravelAlarmScreen(
     // Local Compose State
     var showAddDialog by remember { mutableStateOf(false) }
     var editingAlarmId by remember { mutableStateOf<Int?>(null) }
+    // Preserve the original active state of the alarm being edited so that saving
+    // an edit does not silently re-enable an alarm the user had toggled OFF.
+    var editingActive by remember { mutableStateOf(true) }
     val isHindi = viewModel.currentLanguage.collectAsStateWithLifecycle().value == "hi"
 
     // Waypoint properties (TO)
@@ -98,13 +110,26 @@ fun TravelAlarmScreen(
     val gpsLatitude by viewModel.latitude.collectAsStateWithLifecycle()
     val gpsLongitude by viewModel.longitude.collectAsStateWithLifecycle()
     val gpsLocationName by viewModel.locationName.collectAsStateWithLifecycle()
+    val isDetectingLocation by viewModel.isDetectingLocation.collectAsStateWithLifecycle()
 
-    LaunchedEffect(awaitingGpsForStart, gpsLatitude, gpsLongitude) {
-        if (awaitingGpsForStart && gpsLatitude != 0.0 && gpsLongitude != 0.0) {
+    // Only fill the start fields once a genuinely fresh GPS fix has completed
+    // (i.e. detection transitioned from running -> finished), so we don't copy
+    // the stale pre-existing dashboard/default location into the FROM field.
+    var startGpsDetectionWasRunning by remember { mutableStateOf(false) }
+    LaunchedEffect(awaitingGpsForStart, isDetectingLocation, gpsLatitude, gpsLongitude) {
+        if (!awaitingGpsForStart) {
+            startGpsDetectionWasRunning = false
+            return@LaunchedEffect
+        }
+        if (isDetectingLocation) {
+            startGpsDetectionWasRunning = true
+        } else if (startGpsDetectionWasRunning && gpsLatitude != 0.0 && gpsLongitude != 0.0) {
+            // Detection finished with a valid fix.
             startLabel = if (gpsLocationName.isNotEmpty()) gpsLocationName else "My Location"
             startLat = gpsLatitude.toString()
             startLng = gpsLongitude.toString()
             awaitingGpsForStart = false
+            startGpsDetectionWasRunning = false
         }
     }
 
@@ -126,6 +151,20 @@ fun TravelAlarmScreen(
         val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
         if (fineGranted || coarseGranted) {
             viewModel.startTravelTracking()
+        }
+    }
+
+    // Dedicated launcher for the inline "My Location" button in the start (FROM)
+    // field. It must request a FRESH GPS fix and must NOT start travel tracking.
+    val startGpsPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+        val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+        if (fineGranted || coarseGranted) {
+            viewModel.triggerAutoLocationDetect()
+        } else {
+            awaitingGpsForStart = false
         }
     }
 
@@ -562,6 +601,7 @@ fun TravelAlarmScreen(
                             startLng = currentLocation?.longitude?.toString() ?: ""
                             searchResultsStart = emptyList()
                             searchQueryStart = ""
+                            editingActive = true
                             editingAlarmId = null
                             showAddDialog = true
                         },
@@ -680,6 +720,7 @@ fun TravelAlarmScreen(
                                 startLng = alarm.startLongitude?.toString() ?: ""
                                 searchResultsStart = emptyList()
                                 searchQueryStart = ""
+                                editingActive = alarm.active
                                 editingAlarmId = alarm.id
                                 showAddDialog = true
                             }
@@ -795,17 +836,25 @@ fun TravelAlarmScreen(
                                     value = startLabel,
                                     onValueChange = { q ->
                                         startLabel = q
-                                        val parts = q.replace("📍", "").trim().split(",")
+                                        val parts = q.replace("📍", "").split(",")
+                                            .map { it.trim() }
+                                            .filter { it.isNotEmpty() }
                                         if (parts.size == 2) {
-                                            val latVal = parts[0].trim().toDoubleOrNull()
-                                            val lngVal = parts[1].trim().toDoubleOrNull()
+                                            val latVal = parts[0].toDoubleOrNull()
+                                            val lngVal = parts[1].toDoubleOrNull()
                                             if (latVal != null && lngVal != null && latVal in -90.0..90.0 && lngVal in -180.0..180.0) {
                                                 startLat = latVal.toString()
                                                 startLng = lngVal.toString()
                                             } else {
+                                                // Not valid coords -> clear any previously parsed
+                                                // coords so the saved value matches the visible label.
+                                                startLat = ""
+                                                startLng = ""
                                                 runStartAddressLookup(q)
                                             }
                                         } else {
+                                            startLat = ""
+                                            startLng = ""
                                             runStartAddressLookup(q)
                                         }
                                     },
@@ -851,7 +900,10 @@ fun TravelAlarmScreen(
                                         // GPS coordinates actually arrive (rather than reading the
                                         // still-stale values synchronously here).
                                         awaitingGpsForStart = true
-                                        locationPermissionLauncher.launch(
+                                        // Detection is kicked off in the launcher callback once
+                                        // permission state is known, so it always runs against a
+                                        // granted permission (no stale read, no tracking start).
+                                        startGpsPermissionLauncher.launch(
                                             arrayOf(
                                                 Manifest.permission.ACCESS_FINE_LOCATION,
                                                 Manifest.permission.ACCESS_COARSE_LOCATION
@@ -861,7 +913,8 @@ fun TravelAlarmScreen(
                                     modifier = Modifier.size(28.dp)
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.GpsFixed,
+                                        imageVector = if (awaitingGpsForStart && isDetectingLocation)
+                                            Icons.Default.GpsNotFixed else Icons.Default.GpsFixed,
                                         contentDescription = "My Location",
                                         tint = SleekPrimary,
                                         modifier = Modifier.size(16.dp)
@@ -963,17 +1016,25 @@ fun TravelAlarmScreen(
                                     value = waypointLabel,
                                     onValueChange = { q ->
                                         waypointLabel = q
-                                        val parts = q.replace("📍", "").trim().split(",")
+                                        val parts = q.replace("📍", "").split(",")
+                                            .map { it.trim() }
+                                            .filter { it.isNotEmpty() }
                                         if (parts.size == 2) {
-                                            val latVal = parts[0].trim().toDoubleOrNull()
-                                            val lngVal = parts[1].trim().toDoubleOrNull()
+                                            val latVal = parts[0].toDoubleOrNull()
+                                            val lngVal = parts[1].toDoubleOrNull()
                                             if (latVal != null && lngVal != null && latVal in -90.0..90.0 && lngVal in -180.0..180.0) {
                                                 waypointLat = latVal.toString()
                                                 waypointLng = lngVal.toString()
                                             } else {
+                                                // Not valid coords -> clear any previously parsed
+                                                // coords so the saved value matches the visible label.
+                                                waypointLat = ""
+                                                waypointLng = ""
                                                 runAddressLookup(q)
                                             }
                                         } else {
+                                            waypointLat = ""
+                                            waypointLng = ""
                                             runAddressLookup(q)
                                         }
                                     },
@@ -1133,8 +1194,8 @@ fun TravelAlarmScreen(
                             Slider(
                                 value = waypointRadius,
                                 onValueChange = { waypointRadius = it },
-                                valueRange = 0.5f..50.0f,
-                                steps = 99,
+                                valueRange = TRAVEL_RADIUS_RANGE,
+                                steps = TRAVEL_RADIUS_STEPS,
                                 colors = SliderDefaults.colors(
                                     thumbColor = SleekPrimary,
                                     activeTrackColor = SleekPrimary,
@@ -1261,8 +1322,10 @@ fun TravelAlarmScreen(
                                                 category = selectedCategory,
                                                 latitude = latDouble!!,
                                                 longitude = lngDouble!!,
-                                                radiusKm = waypointRadius.toDouble(),
-                                                active = true,
+                                                radiusKm = waypointRadius
+                                                    .coerceIn(TRAVEL_RADIUS_MIN, TRAVEL_RADIUS_MAX)
+                                                    .toDouble(),
+                                                active = editingActive,
                                                 ttsEnabled = waypointTts,
                                                 flashEnabled = waypointFlash,
                                                 vibrationEnabled = waypointVibration,
@@ -1277,7 +1340,9 @@ fun TravelAlarmScreen(
                                                 category = selectedCategory,
                                                 latitude = latDouble!!,
                                                 longitude = lngDouble!!,
-                                                radiusKm = waypointRadius.toDouble(),
+                                                radiusKm = waypointRadius
+                                                    .coerceIn(TRAVEL_RADIUS_MIN, TRAVEL_RADIUS_MAX)
+                                                    .toDouble(),
                                                 active = true,
                                                 ttsEnabled = waypointTts,
                                                 flashEnabled = waypointFlash,
@@ -1441,10 +1506,10 @@ fun TravelAlarmCard(
             }
 
             Slider(
-                value = alarm.radiusKm.toFloat(),
+                value = alarm.radiusKm.toFloat().coerceIn(TRAVEL_RADIUS_MIN, TRAVEL_RADIUS_MAX),
                 onValueChange = { onUpdateRadius(it.toDouble()) },
-                valueRange = 0.5f..10.0f,
-                steps = 19,
+                valueRange = TRAVEL_RADIUS_RANGE,
+                steps = TRAVEL_RADIUS_STEPS,
                 colors = SliderDefaults.colors(
                     thumbColor = SleekSecondary,
                     activeTrackColor = SleekSecondary,

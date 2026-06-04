@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +55,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import com.example.alarm.data.Alarm
+import com.example.alarm.data.SunAlarmResolver
 import com.example.alarm.opengl.Celestial3DView
 import com.example.alarm.ui.weather.WeatherBackground
 import com.example.alarm.weather.AirQualityInfo
@@ -64,6 +66,7 @@ import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 
@@ -101,8 +104,8 @@ fun DashboardScreen(
     }
 
     var showLocationSearchDialog by remember { mutableStateOf(false) }
-    var selectedPlanet by remember { mutableStateOf<String?>(null) }
-    var activeTab by remember { mutableIntStateOf(0) }
+    var selectedPlanet by rememberSaveable { mutableStateOf<String?>(null) }
+    var activeTab by rememberSaveable { mutableIntStateOf(0) }
     // Alarm whose OFF-toggle on a repeating alarm triggered the skip/turn-off dialog.
     var skipDialogAlarm by remember { mutableStateOf<Alarm?>(null) }
     val isTravelTrackingActive by viewModel.isTravelTrackingActive.collectAsStateWithLifecycle()
@@ -942,12 +945,32 @@ fun SleekAlarmItemRow(
 
             // Time and Labels
             Column(modifier = Modifier.weight(1f)) {
-                val hour12 = if (alarm.hour % 12 == 0) 12 else alarm.hour % 12
-                val ampm = if (alarm.hour >= 12) "PM" else "AM"
+                // For SUNRISE/SUNSET alarms the stored hour/minute is the RAW (standard, no-DST)
+                // wall clock. Render the same absolute instant the hero/next-occurrence uses so the
+                // card matches the real ring time (and isn't off by the DST offset for half the year).
+                val (displayHour, displayMinute) = remember(alarm) {
+                    if (alarm.alarmType == "SUNRISE" || alarm.alarmType == "SUNSET") {
+                        try {
+                            val instant = SunAlarmResolver.nextTriggerInstant(
+                                alarm,
+                                java.time.Instant.now(),
+                                java.time.ZoneId.systemDefault()
+                            )
+                            val local = instant.atZone(java.time.ZoneId.systemDefault())
+                            Pair(local.hour, local.minute)
+                        } catch (e: Exception) {
+                            Pair(alarm.hour, alarm.minute)
+                        }
+                    } else {
+                        Pair(alarm.hour, alarm.minute)
+                    }
+                }
+                val hour12 = if (displayHour % 12 == 0) 12 else displayHour % 12
+                val ampm = if (displayHour >= 12) "PM" else "AM"
                 
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
-                        text = String.format("%02d:%02d", hour12, alarm.minute),
+                        text = String.format("%02d:%02d", hour12, displayMinute),
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (alarm.active) SleekActiveText else SleekActiveText.copy(alpha = 0.4f)
@@ -1601,7 +1624,7 @@ fun LocationSearchDialog(
                     }
                 } else {
                     Text(
-                        text = viewModel.translate("Search city (e.g. London, Reykjavik, Tokyo...)"),
+                        text = viewModel.translate("Search city (e.g. Reykjavik, London, Tokyo...)"),
                         fontSize = 11.sp,
                         color = SleekMutedText,
                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
@@ -1624,8 +1647,8 @@ fun SleekWeatherSection(
     val detailedWeather by viewModel.detailedWeather.collectAsStateWithLifecycle()
     val isWeatherLoading by viewModel.isWeatherLoading.collectAsStateWithLifecycle()
 
-    var selectedTab by remember { mutableStateOf(0) } // 0 = TODAY, 1 = FUTURE FORECAST, 2 = HISTORIC HISTORY
-    var expandedDayIso by remember { mutableStateOf<String?>(null) } // for item accordion expansion
+    var selectedTab by rememberSaveable { mutableStateOf(0) } // 0 = TODAY, 1 = FUTURE FORECAST, 2 = HISTORIC HISTORY
+    var expandedDayIso by rememberSaveable { mutableStateOf<String?>(null) } // for item accordion expansion
 
     Card(
         modifier = modifier
@@ -1760,14 +1783,14 @@ fun SleekWeatherSection(
                                     )
                                     WeatherParamLabelValue(
                                         label = translateWeatherText("Apparent", lang),
-                                        value = "${weather.apparentTemperatureC.toInt()}°C",
+                                        value = if (weather.apparentTemperatureC.isNaN()) "--" else "${weather.apparentTemperatureC.roundToInt()}°C",
                                         icon = Icons.Default.WbSunny
                                     )
                                 }
                                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                                     WeatherParamLabelValue(
                                         label = translateWeatherText("Precip", lang),
-                                        value = "${weather.precipitationMm} mm",
+                                        value = String.format(java.util.Locale.US, "%.1f mm", weather.precipitationMm),
                                         icon = Icons.Default.PlayArrow
                                     )
                                     WeatherParamLabelValue(
@@ -1794,8 +1817,17 @@ fun SleekWeatherSection(
 
                         Spacer(modifier = Modifier.height(10.dp))
 
-                        // Next 24 hours of hourly details (horizontal scroll)
-                        val now = java.time.LocalDateTime.now()
+                        // Next 24 hours of hourly details (horizontal scroll).
+                        // API timeIso strings are in the LOCATION's local time (timezone=auto), so
+                        // compute "now" in the location's zone too — not the device's — otherwise the
+                        // 24h slice starts at the wrong hour for a city in another timezone.
+                        val now = try {
+                            java.time.LocalDateTime.now(
+                                java.time.ZoneOffset.ofTotalSeconds((tzOffset * 3600).toInt())
+                            )
+                        } catch (e: Exception) {
+                            java.time.LocalDateTime.now()
+                        }
                         val currentHourIsoStr = now.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:00"))
                         var startIdx = weather.hourlyList.indexOfFirst { it.timeIso >= currentHourIsoStr }
                         if (startIdx < 0) startIdx = 0
@@ -1834,7 +1866,7 @@ fun SleekWeatherSection(
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Text(
-                                            text = "${hour.temperatureC.toInt()}°",
+                                            text = if (hour.temperatureC.isNaN()) "--" else "${hour.temperatureC.roundToInt()}°",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Black,
                                             color = SleekActiveText
@@ -1951,8 +1983,10 @@ fun WeatherDaysList(
                             tint = color,
                             modifier = Modifier.size(22.dp)
                         )
+                        val hiStr = if (day.maxTempC.isNaN()) "--" else "${day.maxTempC.roundToInt()}°"
+                        val loStr = if (day.minTempC.isNaN()) "--" else "${day.minTempC.roundToInt()}°"
                         Text(
-                            text = "${day.maxTempC.toInt()}° / ${day.minTempC.toInt()}°",
+                            text = "$hiStr / $loStr",
                             fontWeight = FontWeight.Black,
                             fontSize = 13.sp,
                             color = SleekActiveText
@@ -2008,7 +2042,7 @@ fun WeatherDaysList(
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Text(
-                                    text = "${hour.temperatureC.toInt()}°",
+                                    text = if (hour.temperatureC.isNaN()) "--" else "${hour.temperatureC.roundToInt()}°",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = SleekActiveText

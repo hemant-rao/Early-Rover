@@ -56,6 +56,10 @@ fun ManageCitiesScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
+                        .clickable(enabled = !isCurrentLocation) {
+                            viewModel.setManualCitySelection(city)
+                            onNavigateBack()
+                        }
                         .background(SleekCardBg),
                 ) {
                     Row(
