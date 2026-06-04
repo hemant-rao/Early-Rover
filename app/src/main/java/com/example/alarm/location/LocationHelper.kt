@@ -29,11 +29,36 @@ class LocationHelper(private val context: Context) {
 
     // In-flight FusedLocation cancellation token, promoted to a field so an external
     // caller can abort a pending current-location request.
+    @Volatile
     private var locationCts: CancellationTokenSource? = null
 
+    // Shared cancellation flag captured by the deeper fallback paths (single-update
+    // listener, IP-geolocation thread, reverse-geocoding thread) which are not tied to
+    // the FusedLocation CancellationTokenSource. They check this before persisting or
+    // posting onSuccess so a cancelled request does not write a stale location.
+    private val cancelled = AtomicBoolean(false)
+
+    // Single-update listener + its timeout handler, lifted to fields so cancellation can
+    // stop them directly. Confined to the main thread (registered/cleared there).
+    private var singleUpdateListener: android.location.LocationListener? = null
+    private var singleUpdateTimeoutHandler: android.os.Handler? = null
+
     fun cancelLocationRequest() {
+        cancelled.set(true)
         locationCts?.cancel()
         locationCts = null
+        try {
+            val listener = singleUpdateListener
+            if (listener != null) {
+                val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+                locationManager?.removeUpdates(listener)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        singleUpdateListener = null
+        singleUpdateTimeoutHandler?.removeCallbacksAndMessages(null)
+        singleUpdateTimeoutHandler = null
     }
 
     companion object {
@@ -124,6 +149,9 @@ class LocationHelper(private val context: Context) {
                                 } catch (e: Exception) {
                                     e.printStackTrace()
                                 }
+                                singleUpdateListener = null
+                                singleUpdateTimeoutHandler = null
+                                if (cancelled.get()) return
                                 processLocation(location, onSuccess, onFailure)
                             }
                             @Deprecated("Deprecated in Java")
@@ -131,6 +159,8 @@ class LocationHelper(private val context: Context) {
                             override fun onProviderEnabled(p0: String) {}
                             override fun onProviderDisabled(p0: String) {}
                         }
+                        singleUpdateListener = singleListener
+                        singleUpdateTimeoutHandler = timeoutHandler
                         locationManager.requestSingleUpdate(provider, singleListener, android.os.Looper.getMainLooper())
                         // If no fix arrives within 15s, stop listening (avoids a leaked listener)
                         // and route to the IP-based fallback so the caller is not left hanging.
@@ -141,6 +171,9 @@ class LocationHelper(private val context: Context) {
                             } catch (e: Exception) {
                                 e.printStackTrace()
                             }
+                            singleUpdateListener = null
+                            singleUpdateTimeoutHandler = null
+                            if (cancelled.get()) return@postDelayed
                             fetchIPLocationFallback(onSuccess, onFailure)
                         }, 15000L)
                     } else {
@@ -184,20 +217,18 @@ class LocationHelper(private val context: Context) {
                     val lng = json.optDouble("longitude", 0.0)
                     val city = json.optString("city", "")
                     val country = json.optString("country_code", "")
-                    val utcOffsetStr = json.optString("utc_offset", "+0000")
-                    
-                    var timezoneOffset = 0.0
-                    try {
-                        if (utcOffsetStr.isNotEmpty() && (utcOffsetStr.startsWith("+") || utcOffsetStr.startsWith("-")) && utcOffsetStr.length >= 5) {
-                            val sign = if (utcOffsetStr[0] == '-') -1.0 else 1.0
-                            val hours = utcOffsetStr.substring(1, 3).toDoubleOrNull() ?: 0.0
-                            val mins = utcOffsetStr.substring(3, 5).toDoubleOrNull() ?: 0.0
-                            timezoneOffset = sign * (hours + mins / 60.0)
-                        } else {
-                            timezoneOffset = Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
+                    // Use the IANA timezone id (not ipapi's `utc_offset`, which includes DST)
+                    // so this path stores the RAW/standard offset, matching the GPS/city-search
+                    // path (TimeZone.rawOffset) and SunCalculator/zoneOf's no-DST assumption.
+                    val tzId = json.optString("timezone", "")
+                    val timezoneOffset = if (tzId.isNotEmpty()) {
+                        try {
+                            java.util.TimeZone.getTimeZone(tzId).rawOffset / (1000.0 * 60.0 * 60.0)
+                        } catch (e: Exception) {
+                            Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
                         }
-                    } catch (e: Exception) {
-                        timezoneOffset = Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
+                    } else {
+                        Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
                     }
                     
                     val name = if (city.isNotEmpty() && country.isNotEmpty()) {
@@ -209,8 +240,10 @@ class LocationHelper(private val context: Context) {
                     }
                     
                     if (lat != 0.0 || lng != 0.0) {
+                        if (cancelled.get()) return@Thread
                         saveLocation(lat, lng, timezoneOffset, name)
                         android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            if (cancelled.get()) return@post
                             onSuccess(lat, lng, timezoneOffset, name)
                         }
                         return@Thread
@@ -256,8 +289,10 @@ class LocationHelper(private val context: Context) {
                         }
 
                         if (lat != 0.0 || lng != 0.0) {
+                            if (cancelled.get()) return@Thread
                             saveLocation(lat, lng, timezoneOffset, name)
                             android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                if (cancelled.get()) return@post
                                 onSuccess(lat, lng, timezoneOffset, name)
                             }
                             return@Thread
@@ -266,8 +301,10 @@ class LocationHelper(private val context: Context) {
                 } catch (pe: Exception) {
                     pe.printStackTrace()
                 }
-                
+
+                if (cancelled.get()) return@Thread
                 android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    if (cancelled.get()) return@post
                     onFailure(e)
                 }
             }
@@ -364,9 +401,11 @@ class LocationHelper(private val context: Context) {
                 detectedName = String.format(java.util.Locale.US, "GPS: %.4f, %.4f", lat, lng)
             }
             
+            if (cancelled.get()) return@Thread
             saveLocation(lat, lng, roundedTzOffset, detectedName)
-            
+
             android.os.Handler(android.os.Looper.getMainLooper()).post {
+                if (cancelled.get()) return@post
                 onSuccess(lat, lng, roundedTzOffset, detectedName)
             }
         }.start()
@@ -378,6 +417,7 @@ class LocationHelper(private val context: Context) {
         onFailure: (Exception) -> Unit
     ) {
         val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
+        cancelled.set(false)
         try {
             val cts = CancellationTokenSource()
             locationCts = cts

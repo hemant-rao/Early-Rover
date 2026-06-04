@@ -348,15 +348,11 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
                 Log.e(TAG, "Failed to acquire wake lock: ", e)
             }
 
-            // 1. Permanently update destination state in database so we loop only once cleanly
-            serviceScope.launch(Dispatchers.IO) {
-                try {
-                    val db = AppDatabase.getDatabase(this@TravelTrackingService)
-                    db.travelAlarmDao().updateTravelAlarm(alarm.copy(active = false))
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to update travel alarm status in db", e)
-                }
-            }
+            // 1. Do NOT permanently disable the alarm in the database. A commuter who takes the
+            // same route daily (e.g. "Bus Stop", "Railway Station") needs the saved alarm to keep
+            // working on every journey. Re-firing within a single tracking session is already
+            // prevented by the in-memory triggeredAlarmIds guard (added in processLocationUpdate
+            // and cleared in cleanupResources), so no DB mutation is required here.
 
             // 2. Play extremely loud sirens
             try {

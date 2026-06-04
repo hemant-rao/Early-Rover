@@ -31,10 +31,12 @@ object SunCalculator {
         val day = date.dayOfMonth
 
         val dy = dayOfYear(year, month, day)
-        
+        val leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+
         // Equation of time and declination of Sun (NOAA simple formula)
-        // Gamma in radians
-        val gamma = 2.0 * Math.PI / 365.0 * (dy - 1.0 + (12.0 - 12.0) / 24.0)
+        // Gamma in radians (use the actual length of the year so leap years don't bias the angle)
+        val daysInYear = if (leap) 366.0 else 365.0
+        val gamma = 2.0 * Math.PI / daysInYear * (dy - 1.0 + (12.0 - 12.0) / 24.0)
         
         // Equation of time in minutes
         val eqTime = 229.18 * (0.000075 + 0.001868 * cos(gamma) - 0.032077 * sin(gamma) - 0.014615 * cos(2.0 * gamma) - 0.040849 * sin(2.0 * gamma))
@@ -48,16 +50,18 @@ object SunCalculator {
         
         val cosH = (cos(zenithRad) / (cos(latRad) * cos(decl))) - (tan(latRad) * tan(decl))
         
-        if (cosH >= 1.0) {
-            // Polar night (sun never rises; boundary = sun grazes horizon at noon)
+        if (cosH > 1.0) {
+            // Polar night (sun never rises). The exact boundary cosH == 1.0 is a real grazing
+            // sunrise/sunset at solar noon, so only strictly-beyond values are treated as polar.
             return SunTimes(null, null, PolarState.POLAR_NIGHT)
         }
-        if (cosH <= -1.0) {
-            // Polar day (sun never sets)
+        if (cosH < -1.0) {
+            // Polar day (sun never sets); cosH == -1.0 is the 24h-grazing boundary, kept as a real event.
             return SunTimes(null, null, PolarState.POLAR_DAY)
         }
 
-        val haRad = acos(cosH)
+        // coerceIn guards acos against any tiny float overshoot past the strict comparisons above.
+        val haRad = acos(cosH.coerceIn(-1.0, 1.0))
         val haDeg = Math.toDegrees(haRad)
 
         // Sunrise and sunset in minutes from UTC midnight

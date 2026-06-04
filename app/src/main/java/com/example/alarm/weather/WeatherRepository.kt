@@ -182,7 +182,7 @@ object WeatherRepository {
             val code = currentJson.optInt("weather_code", -1)
             val cloudCover = currentJson.optInt("cloud_cover", -1)
             val isDay = currentJson.optInt("is_day", 1) == 1
-            val temp = currentJson.optDouble("temperature_2m", 0.0)
+            val temp = currentJson.optDouble("temperature_2m", Double.NaN)
             val relativeHumidity = currentJson.optInt("relative_humidity_2m", 0)
             val apparentTemperature = currentJson.optDouble("apparent_temperature", temp)
             val precipitation = currentJson.optDouble("precipitation", 0.0)
@@ -205,21 +205,21 @@ object WeatherRepository {
                 val length = times?.length() ?: 0
                 for (i in 0 until length) {
                     val tIso = times?.optString(i) ?: ""
-                    val tVal = temps?.optDouble(i) ?: 0.0
+                    val tVal = temps?.optDouble(i) ?: Double.NaN
                     val codeVal = codes?.optInt(i, -1) ?: -1
                     val hum = humidities?.optInt(i, 0) ?: 0
-                    val app = appTemps?.optDouble(i) ?: 0.0
+                    val app = appTemps?.optDouble(i) ?: Double.NaN
                     val prec = precips?.optDouble(i) ?: 0.0
                     val wind = winds?.optDouble(i) ?: 0.0
 
                     hourlyList.add(
                         HourlyDetail(
                             timeIso = tIso,
-                            temperatureC = if (tVal.isNaN()) 0.0 else tVal,
+                            temperatureC = tVal,
                             condition = mapCode(codeVal),
                             rawCode = codeVal,
                             humidityPercent = hum,
-                            apparentTempC = if (app.isNaN()) 0.0 else app,
+                            apparentTempC = app,
                             precipitationMm = if (prec.isNaN()) 0.0 else prec,
                             windSpeedKmh = if (wind.isNaN()) 0.0 else wind
                         )
@@ -242,16 +242,16 @@ object WeatherRepository {
                 for (i in 0 until length) {
                     val dIso = times?.optString(i) ?: ""
                     val codeVal = codes?.optInt(i, -1) ?: -1
-                    val maxT = maxTemps?.optDouble(i) ?: 0.0
-                    val minT = minTemps?.optDouble(i) ?: 0.0
+                    val maxT = maxTemps?.optDouble(i) ?: Double.NaN
+                    val minT = minTemps?.optDouble(i) ?: Double.NaN
                     val rise = sunrises?.optString(i) ?: ""
                     val set = sunsets?.optString(i) ?: ""
 
                     dailyList.add(
                         DailyDetail(
                             dateIso = dIso,
-                            maxTempC = if (maxT.isNaN()) 0.0 else maxT,
-                            minTempC = if (minT.isNaN()) 0.0 else minT,
+                            maxTempC = maxT,
+                            minTempC = minT,
                             condition = mapCode(codeVal),
                             rawCode = codeVal,
                             sunriseIso = rise,
