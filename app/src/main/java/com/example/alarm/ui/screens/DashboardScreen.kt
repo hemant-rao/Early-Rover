@@ -299,7 +299,7 @@ fun DashboardScreen(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "DASH",
+                                text = viewModel.translate("DASH"),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (activeTab == 0) SleekPrimary else SleekMutedText.copy(alpha = 0.7f)
@@ -327,7 +327,7 @@ fun DashboardScreen(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "TRAVEL",
+                                text = viewModel.translate("TRAVEL"),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (activeTab == 3) SleekPrimary else SleekMutedText.copy(alpha = 0.7f)
@@ -355,7 +355,7 @@ fun DashboardScreen(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "WEATHER",
+                                text = viewModel.translate("WEATHER"),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (activeTab == 1) SleekPrimary else SleekMutedText.copy(alpha = 0.7f)
@@ -383,7 +383,7 @@ fun DashboardScreen(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "SETTINGS",
+                                text = viewModel.translate("SETTINGS"),
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (activeTab == 2) SleekPrimary else SleekMutedText.copy(alpha = 0.7f)
@@ -664,7 +664,7 @@ fun DashboardScreen(
                                                     "SUNSET" -> viewModel.translate("Sunset Alarm")
                                                     else -> viewModel.translate("Standard Clock Alarm")
                                                 }
-                                                if (repeats.isEmpty()) "$typeLabel • Once" else "$typeLabel • ${getDailyRepeaterString(repeats)}"
+                                                if (repeats.isEmpty()) "$typeLabel • ${viewModel.translate("Once")}" else "$typeLabel • ${getDailyRepeaterString(repeats) { viewModel.translate(it) }}"
                                             } else {
                                                 viewModel.translate("No Alarms Scheduled")
                                             }
@@ -766,7 +766,8 @@ fun DashboardScreen(
                                         alarm = alarm,
                                         onRowClick = { onNavigateToEditAlarm(alarm.id) },
                                         onToggleActive = { onAlarmToggle(alarm) },
-                                        onDeleteClick = { viewModel.deleteAlarm(alarm) }
+                                        onDeleteClick = { viewModel.deleteAlarm(alarm) },
+                                        translate = { viewModel.translate(it) }
                                     )
                                 }
                             }
@@ -886,7 +887,8 @@ fun SleekAlarmItemRow(
     alarm: Alarm,
     onRowClick: () -> Unit,
     onToggleActive: () -> Unit,
-    onDeleteClick: () -> Unit
+    onDeleteClick: () -> Unit,
+    translate: (String) -> String = { it }
 ) {
     Card(
         modifier = Modifier
@@ -986,19 +988,19 @@ fun SleekAlarmItemRow(
                 }
 
                 val titleDefault = if (alarm.title.isNotEmpty()) alarm.title else when (alarm.alarmType) {
-                    "SUNRISE" -> "Sunrise Tracker"
-                    "SUNSET" -> "Sunset Tracker"
-                    else -> "Manual Alarm"
+                    "SUNRISE" -> translate("Sunrise Tracker")
+                    "SUNSET" -> translate("Sunset Tracker")
+                    else -> translate("Manual Alarm")
                 }
 
                 val trackerDesc = when (alarm.alarmType) {
                     "SUNRISE", "SUNSET" -> {
-                        val exactPart = if (alarm.ringAtExactAlso) "exactly + " else ""
-                        val offsetPart = if (alarm.offsetMinutes == 0) (if (!alarm.ringAtExactAlso) "exactly based" else "(no offset)") else if (alarm.offsetMinutes < 0) "${-alarm.offsetMinutes}m before" else "${alarm.offsetMinutes}m after"
+                        val exactPart = if (alarm.ringAtExactAlso) "${translate("exactly")} + " else ""
+                        val offsetPart = if (alarm.offsetMinutes == 0) (if (!alarm.ringAtExactAlso) translate("exactly based") else translate("(no offset)")) else if (alarm.offsetMinutes < 0) "${-alarm.offsetMinutes}${translate("m before")}" else "${alarm.offsetMinutes}${translate("m after")}"
                         val desc = "$exactPart$offsetPart".trimEnd(' ', '+')
                         desc
                     }
-                    else -> if (alarm.title.isEmpty()) "Standard Clock Alarm" else ""
+                    else -> if (alarm.title.isEmpty()) translate("Standard Clock Alarm") else ""
                 }
 
                 Text(
@@ -1010,7 +1012,7 @@ fun SleekAlarmItemRow(
                 
                 if (alarm.isRepeating()) {
                     Text(
-                        text = getDailyRepeaterString(alarm.getRepeatDaysList()),
+                        text = getDailyRepeaterString(alarm.getRepeatDaysList(), translate),
                         fontSize = 11.sp,
                         color = if (alarm.active) SleekSecondary else SleekMutedText.copy(alpha = 0.5f),
                         fontWeight = FontWeight.Medium,
@@ -1031,7 +1033,7 @@ fun SleekAlarmItemRow(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = if (alarm.snoozeEnabled) "Snooze ${alarm.snoozeMinutes}m" else "Snooze off",
+                        text = if (alarm.snoozeEnabled) "${translate("Snooze")} ${alarm.snoozeMinutes}m" else translate("Snooze off"),
                         fontSize = 10.sp,
                         color = if (alarm.active) SleekMutedText else SleekMutedText.copy(alpha = 0.5f),
                         fontWeight = FontWeight.Medium
@@ -1114,7 +1116,7 @@ fun CompactWeatherTimeWidget(
                 modifier = Modifier.size(18.dp)
             )
             Text(
-                text = "${weather.temperatureC.toInt()}°",
+                text = "${weather.temperatureC.roundToInt()}°",
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Black,
                 color = SleekActiveText
@@ -1377,13 +1379,13 @@ private fun Modifier.fullBleed(padding: Dp): Modifier = this.layout { measurable
     }
 }
 
-private fun getDailyRepeaterString(days: List<Int>): String {
-    if (days.size == 7) return "Every day"
-    if (days.size == 5 && !days.contains(6) && !days.contains(7)) return "Weekdays"
-    if (days.size == 2 && days.contains(6) && days.contains(7)) return "Weekends"
-    
+private fun getDailyRepeaterString(days: List<Int>, translate: (String) -> String = { it }): String {
+    if (days.size == 7) return translate("Every day")
+    if (days.size == 5 && !days.contains(6) && !days.contains(7)) return translate("Weekdays")
+    if (days.size == 2 && days.contains(6) && days.contains(7)) return translate("Weekends")
+
     val dayChars = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-    return days.sorted().mapNotNull { dayChars.getOrNull(it - 1) }.joinToString(", ")
+    return days.sorted().mapNotNull { dayChars.getOrNull(it - 1)?.let(translate) }.joinToString(", ")
 }
 
 @Composable
@@ -1748,7 +1750,7 @@ fun SleekWeatherSection(
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        text = "${weather.current.temperatureC.toInt()}°",
+                                        text = if (weather.current.temperatureC.isNaN()) "--" else "${weather.current.temperatureC.roundToInt()}°",
                                         fontSize = 44.sp,
                                         fontWeight = FontWeight.Black,
                                         color = SleekActiveText
@@ -1795,7 +1797,7 @@ fun SleekWeatherSection(
                                     )
                                     WeatherParamLabelValue(
                                         label = translateWeatherText("Wind", lang),
-                                        value = "${weather.windSpeedKmh.toInt()} km/h",
+                                        value = "${weather.windSpeedKmh.roundToInt()} km/h",
                                         icon = Icons.Default.Refresh
                                     )
                                 }
@@ -2165,14 +2167,14 @@ fun AirQualityCard(
                     if (showPm25) {
                         WeatherParamLabelValue(
                             label = translateWeatherText("PM2.5", lang),
-                            value = "${aqi.pm25.toInt()} µg/m³",
+                            value = "${aqi.pm25.roundToInt()} µg/m³",
                             icon = Icons.Default.Air
                         )
                     }
                     if (showPm10) {
                         WeatherParamLabelValue(
                             label = translateWeatherText("PM10", lang),
-                            value = "${aqi.pm10.toInt()} µg/m³",
+                            value = "${aqi.pm10.roundToInt()} µg/m³",
                             icon = Icons.Default.Air
                         )
                     }
@@ -2378,7 +2380,7 @@ fun LocationCarouselSection(
                 }
                 
                 val tempSuffix = if (isActive && weatherInfo != null && !weatherInfo!!.temperatureC.isNaN()) {
-                    " (${weatherInfo!!.temperatureC.toInt()}°)"
+                    " (${weatherInfo!!.temperatureC.roundToInt()}°)"
                 } else {
                     " ($simulatedTemp)"
                 }

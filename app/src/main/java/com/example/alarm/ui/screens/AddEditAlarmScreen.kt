@@ -381,16 +381,31 @@ fun AddEditAlarmScreen(
                         // so the shown time matches what will actually be saved.
                         val previewBase = when (alarm.alarmType) {
                             "SUNRISE", "SUNSET" -> if (alarm.hasLocation()) {
-                                com.example.alarm.data.SunAlarmResolver.targetTime(
-                                    alarm.alarmType,
-                                    com.example.alarm.data.SunAlarmResolver.Location(
-                                        alarm.latitude, alarm.longitude, alarm.timezoneOffset, alarm.locationName
-                                    ),
-                                    java.time.LocalDate.now(
-                                        com.example.alarm.data.SunAlarmResolver.zoneOf(alarm.timezoneOffset)
-                                    ),
-                                    alarm.offsetMinutes
-                                ).toLocalTime()
+                                // The subsystem stores RAW/standard (no-DST) offsets, so
+                                // targetTime(...).toLocalTime() yields the standard-time wall clock,
+                                // which is off by the DST hour for half the year. Convert through the
+                                // real fire instant into the device zone — exactly as the dashboard
+                                // card does (DashboardScreen.kt) — so the preview matches the actual
+                                // ring time. nextTriggerInstant consumes alarm.offsetMinutes, so the
+                                // preview stays reactive to offset-chip changes on the live copy.
+                                try {
+                                    com.example.alarm.data.SunAlarmResolver.nextTriggerInstant(
+                                        alarm,
+                                        java.time.Instant.now(),
+                                        java.time.ZoneId.systemDefault()
+                                    ).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
+                                } catch (e: Exception) {
+                                    com.example.alarm.data.SunAlarmResolver.targetTime(
+                                        alarm.alarmType,
+                                        com.example.alarm.data.SunAlarmResolver.Location(
+                                            alarm.latitude, alarm.longitude, alarm.timezoneOffset, alarm.locationName
+                                        ),
+                                        java.time.LocalDate.now(
+                                            com.example.alarm.data.SunAlarmResolver.zoneOf(alarm.timezoneOffset)
+                                        ),
+                                        alarm.offsetMinutes
+                                    ).toLocalTime()
+                                }
                             } else {
                                 val event = if (alarm.alarmType == "SUNRISE") sunriseTime else sunsetTime
                                 event.plusMinutes(alarm.offsetMinutes.toLong())
