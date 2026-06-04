@@ -1,9 +1,24 @@
 package com.example.alarm.opengl
 
+import android.content.Context
+import android.graphics.PixelFormat
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import android.util.Log
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -12,6 +27,100 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.cos
 import kotlin.math.sin
+
+/**
+ * GLSurfaceView host for [Sun3DRenderer]. This is the concrete, instantiable surface
+ * that draws the spec-required daylight ring with a "now" marker whose position encodes
+ * the current time between sunrise and sunset, plus sunrise/sunset/alarm markers.
+ *
+ * Wire this into the dashboard (see [Sun3DView]) to actually render the time-encoded
+ * marker the original 3D spec calls for.
+ */
+class Sun3DGLView(context: Context) : GLSurfaceView(context) {
+
+    val sunRenderer = Sun3DRenderer()
+
+    init {
+        setEGLContextClientVersion(2)
+        // Transparent surface so any weather/sky backdrop shows through behind the ring.
+        setEGLConfigChooser(8, 8, 8, 8, 16, 0)
+        holder.setFormat(PixelFormat.TRANSLUCENT)
+        setZOrderMediaOverlay(true)
+        setRenderer(sunRenderer)
+        renderMode = RENDERMODE_CONTINUOUSLY // ring rotates + sun sweeps across the day
+    }
+
+    /** Update the daylight span, current time and active alarms drawn on the ring. */
+    fun setTimes(
+        sunrise: LocalTime,
+        sunset: LocalTime,
+        now: LocalTime = LocalTime.now(),
+        alarms: List<LocalTime> = emptyList(),
+        dark: Boolean
+    ) {
+        sunRenderer.sunriseHour = sunrise.hour + sunrise.minute / 60.0f
+        sunRenderer.sunsetHour = sunset.hour + sunset.minute / 60.0f
+        sunRenderer.currentHour = now.hour + now.minute / 60.0f
+        sunRenderer.alarmHours = alarms.map { it.hour + it.minute / 60.0f }
+        sunRenderer.isDarkMode = dark
+    }
+}
+
+/**
+ * Compose host for the spec-conformant daylight-ring scene ([Sun3DGLView] + [Sun3DRenderer]).
+ *
+ * Unlike [Celestial3DView] (the heliocentric planet layout), this view actually draws the
+ * sunrise->sunset "now" marker and per-alarm markers required by the original 3D spec.
+ * Drop it into DashboardScreen to surface that behaviour to the user.
+ */
+@Composable
+fun Sun3DView(
+    modifier: Modifier = Modifier,
+    sunriseTime: LocalTime = LocalTime.of(6, 0),
+    sunsetTime: LocalTime = LocalTime.of(18, 0),
+    activeAlarms: List<LocalTime> = emptyList(),
+    isDark: Boolean = isSystemInDarkTheme()
+) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    var glView by remember { mutableStateOf<Sun3DGLView?>(null) }
+
+    AndroidView(
+        modifier = modifier.fillMaxSize(),
+        factory = { ctx ->
+            Sun3DGLView(ctx).also {
+                it.setTimes(sunriseTime, sunsetTime, LocalTime.now(), activeAlarms, isDark)
+                glView = it
+            }
+        },
+        update = {
+            it.setTimes(sunriseTime, sunsetTime, LocalTime.now(), activeAlarms, isDark)
+        }
+    )
+
+    DisposableEffect(lifecycleOwner, glView) {
+        val view = glView ?: return@DisposableEffect onDispose {}
+
+        val currentLifecycleState = lifecycleOwner.lifecycle.currentState
+        if (currentLifecycleState.isAtLeast(Lifecycle.State.RESUMED)) {
+            view.onResume()
+        } else {
+            view.onPause()
+        }
+
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> view.onResume()
+                Lifecycle.Event.ON_PAUSE -> view.onPause()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            view.onPause()
+        }
+    }
+}
 
 class Sun3DRenderer : GLSurfaceView.Renderer {
 

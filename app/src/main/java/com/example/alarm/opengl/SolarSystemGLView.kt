@@ -83,6 +83,10 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
 
     private fun refreshAndScheduleNext() {
         renderer.updatePositions(LocalDateTime.now())
+        // In static mode the render loop is stopped and renderMode is
+        // RENDERMODE_WHEN_DIRTY, so explicitly repaint to reflect the advanced
+        // real-time positions. (In animated mode the render loop redraws anyway.)
+        if (!animateOrbits) requestRender()
         removeCallbacks(ticker)
         postDelayed(ticker, 60_000L)
     }
@@ -107,10 +111,15 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
         if (animateOrbits) {
             startRenderLoop()
         }
+        // Re-arm the slow position-refresh ticker so it only runs while resumed.
+        removeCallbacks(ticker)
+        postDelayed(ticker, 60_000L)
     }
 
     override fun onPause() {
         stopRenderLoop()
+        // Stop waking the main thread to recompute positions while paused.
+        removeCallbacks(ticker)
         super.onPause()
     }
 
