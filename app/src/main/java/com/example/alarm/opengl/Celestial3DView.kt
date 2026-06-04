@@ -19,13 +19,8 @@ import java.time.LocalTime
  * Compose host for the native OpenGL ES solar system. Replaces the old WebView /
  * Three.js scene that caused the "pixel rendering not responding" ANR.
  *
- * The heliocentric planet layout is computed natively from the device clock inside
- * [SolarSystemGLView], so the scene already reflects the current moment (each planet
- * sits at its real heliocentric angle "right now").
- *
- * NOTE: this is the original, finalized solar/planet visualization and must not be
- * altered. [sunriseTime], [sunsetTime] and [activeAlarms] are accepted for API
- * compatibility but are intentionally NOT rendered as any overlay on this scene.
+ * The parameters are kept for call-site compatibility; the heliocentric layout is
+ * computed natively from the device clock inside [SolarSystemGLView].
  */
 @Composable
 fun Celestial3DView(

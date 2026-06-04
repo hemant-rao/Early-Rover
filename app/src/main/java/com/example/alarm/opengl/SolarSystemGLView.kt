@@ -73,9 +73,7 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
         // Transparent surface so the animated weather sky shows through behind it.
         setEGLConfigChooser(8, 8, 8, 8, 16, 0)
         holder.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
-        // Compose inside the window (not above it) so the surface clips to its
-        // 380dp Box, scrolls with the LazyColumn, and lets dialogs draw above it.
-        setZOrderMediaOverlay(true)
+        setZOrderOnTop(true)
         setRenderer(renderer)
         renderMode = RENDERMODE_WHEN_DIRTY
         renderer.updatePositions(LocalDateTime.now())
@@ -83,10 +81,6 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
 
     private fun refreshAndScheduleNext() {
         renderer.updatePositions(LocalDateTime.now())
-        // In static mode the render loop is stopped and renderMode is
-        // RENDERMODE_WHEN_DIRTY, so explicitly repaint to reflect the advanced
-        // real-time positions. (In animated mode the render loop redraws anyway.)
-        if (!animateOrbits) requestRender()
         removeCallbacks(ticker)
         postDelayed(ticker, 60_000L)
     }
@@ -111,15 +105,10 @@ class SolarSystemGLView(context: Context) : GLSurfaceView(context) {
         if (animateOrbits) {
             startRenderLoop()
         }
-        // Re-arm the slow position-refresh ticker so it only runs while resumed.
-        removeCallbacks(ticker)
-        postDelayed(ticker, 60_000L)
     }
 
     override fun onPause() {
         stopRenderLoop()
-        // Stop waking the main thread to recompute positions while paused.
-        removeCallbacks(ticker)
         super.onPause()
     }
 

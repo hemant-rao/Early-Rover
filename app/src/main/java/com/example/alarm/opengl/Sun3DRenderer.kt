@@ -1,24 +1,9 @@
 package com.example.alarm.opengl
 
-import android.content.Context
-import android.graphics.PixelFormat
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.opengl.Matrix
 import android.util.Log
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
@@ -27,156 +12,6 @@ import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.cos
 import kotlin.math.sin
-
-/**
- * GLSurfaceView host for [Sun3DRenderer]. This is the concrete, instantiable surface
- * that draws the spec-required daylight ring with a "now" marker whose position encodes
- * the current time between sunrise and sunset, plus sunrise/sunset/alarm markers.
- *
- * Wire this into the dashboard (see [Sun3DView]) to actually render the time-encoded
- * marker the original 3D spec calls for.
- */
-class Sun3DGLView(context: Context) : GLSurfaceView(context) {
-
-    val sunRenderer = Sun3DRenderer()
-
-    private var isRenderingActive = false
-
-    // Self-rescheduling ~20 FPS ticker so the decorative ring spin doesn't run the
-    // GL thread at the device's full refresh rate (which doubled GPU/compositor load
-    // against the throttled sibling planet surface). Mirrors SolarSystemGLView.
-    private val renderTicker = object : Runnable {
-        override fun run() {
-            if (isRenderingActive) {
-                requestRender()
-                postDelayed(this, 50L) // Peaceful ~20 FPS
-            }
-        }
-    }
-
-    private fun startRenderLoop() {
-        if (!isRenderingActive) {
-            isRenderingActive = true
-            removeCallbacks(renderTicker)
-            post(renderTicker)
-        }
-    }
-
-    private fun stopRenderLoop() {
-        isRenderingActive = false
-        removeCallbacks(renderTicker)
-    }
-
-    init {
-        setEGLContextClientVersion(2)
-        // Transparent surface so any weather/sky backdrop shows through behind the ring.
-        setEGLConfigChooser(8, 8, 8, 8, 16, 0)
-        holder.setFormat(PixelFormat.TRANSLUCENT)
-        setZOrderMediaOverlay(true)
-        setRenderer(sunRenderer)
-        // Throttled redraw (WHEN_DIRTY + ~20 FPS ticker) instead of CONTINUOUSLY so
-        // the two stacked GL surfaces don't both run unbounded.
-        renderMode = RENDERMODE_WHEN_DIRTY
-    }
-
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        startRenderLoop()
-    }
-
-    override fun onDetachedFromWindow() {
-        stopRenderLoop()
-        super.onDetachedFromWindow()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        startRenderLoop()
-    }
-
-    override fun onPause() {
-        stopRenderLoop()
-        super.onPause()
-    }
-
-    /** Update the daylight span, current time and active alarms drawn on the ring. */
-    fun setTimes(
-        sunrise: LocalTime,
-        sunset: LocalTime,
-        now: LocalTime = LocalTime.now(),
-        alarms: List<LocalTime> = emptyList(),
-        dark: Boolean
-    ) {
-        sunRenderer.sunriseHour = sunrise.hour + sunrise.minute / 60.0f
-        sunRenderer.sunsetHour = sunset.hour + sunset.minute / 60.0f
-        sunRenderer.currentHour = now.hour + now.minute / 60.0f
-        sunRenderer.alarmHours = alarms.map { it.hour + it.minute / 60.0f }
-        sunRenderer.isDarkMode = dark
-        // RENDERMODE_WHEN_DIRTY: repaint so data changes are reflected even if the
-        // ticker hasn't fired yet.
-        requestRender()
-    }
-}
-
-/**
- * Compose host for the spec-conformant daylight-ring scene ([Sun3DGLView] + [Sun3DRenderer]).
- *
- * Unlike [Celestial3DView] (the heliocentric planet layout), this view actually draws the
- * sunrise->sunset "now" marker and per-alarm markers required by the original 3D spec.
- * Drop it into DashboardScreen to surface that behaviour to the user.
- */
-@Composable
-fun Sun3DView(
-    modifier: Modifier = Modifier,
-    sunriseTime: LocalTime = LocalTime.of(6, 0),
-    sunsetTime: LocalTime = LocalTime.of(18, 0),
-    activeAlarms: List<LocalTime> = emptyList(),
-    isDark: Boolean = isSystemInDarkTheme(),
-    // "now" in the ACTIVE LOCATION's timezone. Callers in a different device TZ
-    // (travel/multi-city) should pass the location-local time so the marker lands
-    // on the correct fraction of the daylight span. Defaults to device wall clock.
-    now: LocalTime = LocalTime.now()
-) {
-    val lifecycleOwner = LocalLifecycleOwner.current
-    var glView by remember { mutableStateOf<Sun3DGLView?>(null) }
-
-    AndroidView(
-        modifier = modifier.fillMaxSize(),
-        factory = { ctx ->
-            Sun3DGLView(ctx).also {
-                it.setTimes(sunriseTime, sunsetTime, now, activeAlarms, isDark)
-                glView = it
-            }
-        },
-        update = {
-            it.setTimes(sunriseTime, sunsetTime, now, activeAlarms, isDark)
-        }
-    )
-
-    DisposableEffect(lifecycleOwner, glView) {
-        val view = glView ?: return@DisposableEffect onDispose {}
-
-        val currentLifecycleState = lifecycleOwner.lifecycle.currentState
-        if (currentLifecycleState.isAtLeast(Lifecycle.State.RESUMED)) {
-            view.onResume()
-        } else {
-            view.onPause()
-        }
-
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> view.onResume()
-                Lifecycle.Event.ON_PAUSE -> view.onPause()
-                else -> {}
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            view.onPause()
-        }
-    }
-}
 
 class Sun3DRenderer : GLSurfaceView.Renderer {
 
@@ -285,11 +120,12 @@ class Sun3DRenderer : GLSurfaceView.Renderer {
             // Rotate sphere over time for dynamic ambient atmosphere
             rotationAngle = (rotationAngle + 0.3f) % 360f
 
-            // Transparent clear: this is the top overlay surface stacked above the
-            // heliocentric planet view, so the planet scene (and the Compose themed
-            // backdrop behind both GL surfaces) must show through behind the ring.
-            // A themed/opaque clear here would occlude the entire planet scene.
-            GLES20.glClearColor(0f, 0f, 0f, 0f)
+            // Theme colors
+            if (isDarkMode) {
+                GLES20.glClearColor(0.04f, 0.05f, 0.08f, 1.0f) // Deep celestial navy
+            } else {
+                GLES20.glClearColor(0.95f, 0.96f, 0.98f, 1.00f) // Clean slate white
+            }
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
 
             // Camera position (Perspective 3D view and tilt)
@@ -317,49 +153,26 @@ class Sun3DRenderer : GLSurfaceView.Renderer {
             val ringColor = if (isDarkMode) floatArrayOf(0.2f, 0.4f, 0.8f, 0.3f) else floatArrayOf(0.7f, 0.8f, 0.9f, 0.5f)
             drawCoords(ringBuffer!!, GLES20.GL_LINE_STRIP, ringVertexCount, ringColor)
 
-            // 2. DRAW NOW (Golden Sun Position on Dial)
-            // Encode current time as a fraction of the daylight span (sunrise -> sunset),
-            // not a raw 24h clock, so the sun sweeps the full ring across the day.
-            // Only draw the marker during daylight (fraction within 0..1); at night the
-            // fraction exceeds the span and would mis-encode the time on the daylight arc.
-            val nowFrac = dayFraction(currentHour)
-            if (nowFrac in 0f..1f) {
-                val nowAngle = -nowFrac * 360.0f + 90f + rotationAngle
-                drawMarkerOnRing(nowAngle, 0.16f, floatArrayOf(0.98f, 0.80f, 0.20f, 1.0f)) // bright sun
-            }
+            // 2. DRAW NOON (Golden Sun Position on Dial)
+            val noonAngle = - (currentHour / 24.0f) * 360.0f + 90f + rotationAngle
+            drawMarkerOnRing(noonAngle, 0.16f, floatArrayOf(0.98f, 0.80f, 0.20f, 1.0f)) // bright sun
 
-            // 3. DRAW SUNRISE INDICATOR (Sunburst Gold) -> start of daylight span (fraction 0)
-            val sunriseAngle = - dayFraction(sunriseHour) * 360.0f + 90f + rotationAngle
+            // 3. DRAW SUNRISE INDICATOR (Sunburst Gold)
+            val sunriseAngle = - (sunriseHour / 24.0f) * 360.0f + 90f + rotationAngle
             drawMarkerOnRing(sunriseAngle, 0.11f, floatArrayOf(0.96f, 0.50f, 0.10f, 0.9f)) // sunrise gold
 
-            // 4. DRAW SUNSET INDICATOR (Crimson Orange) -> end of daylight span (fraction 1)
-            val sunsetAngle = - dayFraction(sunsetHour) * 360.0f + 90f + rotationAngle
+            // 4. DRAW SUNSET INDICATOR (Crimson Orange)
+            val sunsetAngle = - (sunsetHour / 24.0f) * 360.0f + 90f + rotationAngle
             drawMarkerOnRing(sunsetAngle, 0.11f, floatArrayOf(0.90f, 0.20f, 0.15f, 0.9f)) // sunset crimson
 
             // 5. DRAW ACTIVE ALARMS (Aura Violet / Teal)
             for (i in alarmHours.indices) {
-                val alarmDegree = - dayFraction(alarmHours[i]) * 360.0f + 90f + rotationAngle
+                val alarmDegree = - (alarmHours[i] / 24.0f) * 360.0f + 90f + rotationAngle
                 drawMarkerOnRing(alarmDegree, 0.08f, floatArrayOf(0.12f, 0.82f, 0.72f, 1.0f)) // vibrant teal
             }
         } catch (e: Exception) {
             Log.e("Sun3DRenderer", "onDrawFrame failed gracefully: ", e)
         }
-    }
-
-    /**
-     * Normalizes an hour-of-day to its position within the daylight span.
-     * Returns 0f at sunrise and 1f at sunset so markers encode the daylight
-     * fraction (per spec) rather than a raw 24h clock angle. Handles a
-     * cross-midnight daylight span and guards against an empty (sunrise == sunset)
-     * span to avoid division by zero.
-     */
-    private fun dayFraction(hour: Float): Float {
-        var span = sunsetHour - sunriseHour
-        if (span < 0f) span += 24f // daylight crosses midnight
-        if (span == 0f) return 0f  // degenerate span: avoid divide-by-zero
-        var delta = hour - sunriseHour
-        if (delta < 0f) delta += 24f
-        return delta / span
     }
 
     private fun drawMarkerOnRing(angleDeg: Float, scale: Float, color: FloatArray) {
@@ -411,25 +224,33 @@ class Sun3DRenderer : GLSurfaceView.Renderer {
     }
 
     private fun setupMarkerCoords() {
-        // Build a flat polygonal bead as a GL_TRIANGLE_FAN laid in the XZ plane so it
-        // matches the orientation of the timeline ring (also in XZ). Emitting (x, 0, z)
-        // makes the disc face up toward the camera at (0, 2.5, 4) instead of standing
-        // edge-on as a thin vertical sliver in the XY plane.
+        // Create simple 3D Diamond / Octahedron pointer mesh coordinates
+        val coords = floatArrayOf(
+            0.0f,  1.0f,  0.0f, // Top point
+            1.0f,  0.0f,  1.0f, // Base midpoints
+           -1.0f,  0.0f,  1.0f,
+           -1.0f,  0.0f, -1.0f,
+            1.0f,  0.0f, -1.0f,
+            1.0f,  0.0f,  1.0f, // repeat starting point to close
+            0.0f, -1.0f,  0.0f  // Bottom point
+        )
+
+        // Make composite geometry with multiple triangular subdivisions
         val pointerCoords = ArrayList<Float>()
-
-        // Center point for GL_TRIANGLE_FAN.
+        
+        // Let's create an elegant polygonal bead shape using simple trig values
         pointerCoords.add(0.0f)
         pointerCoords.add(0.0f)
-        pointerCoords.add(0.0f)
-
+        pointerCoords.add(0.0f) // center point for GL_TRIANGLE_FAN
+        
         val radialPoints = 16
         for (i in 0..radialPoints) {
             val theta = i * (2.0 * Math.PI) / radialPoints
             val x = cos(theta).toFloat()
-            val z = sin(theta).toFloat()
+            val y = sin(theta).toFloat()
             pointerCoords.add(x)
-            pointerCoords.add(0.0f) // flat disc lying in the XZ plane (matches ring)
-            pointerCoords.add(z)
+            pointerCoords.add(y)
+            pointerCoords.add(0.0f) // flat diamond shape on face
         }
 
         markerVertexCount = pointerCoords.size / 3
