@@ -1,9 +1,10 @@
 package com.example.alarm.scheduling
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.util.Log
 import com.example.alarm.data.AppDatabase
 import com.example.alarm.data.SunAlarmResolver
@@ -61,29 +62,47 @@ class RescheduleReceiver : BroadcastReceiver() {
                                 } else {
                                     ZoneId.systemDefault()
                                 }
-                            val intendedToday = now.atZone(zone).toLocalDate()
-                                .atTime(updated.hour, updated.minute)
+                            // Use the shared resolver (single source of truth the scheduler uses) so a
+                            // negative-offset sun alarm whose intended instant rolls back to the previous
+                            // calendar day is decided fire-vs-miss consistently with every other path.
+                            val today = now.atZone(zone).toLocalDate()
+                            val intended = SunAlarmResolver.fireDateTimeOn(updated, today)
                                 .atZone(zone)
                                 .toInstant()
 
-                            if (intendedToday.isAfter(now)) {
+                            if (intended.isAfter(now)) {
                                 // Still in the future today: schedule normally.
                                 scheduler.schedule(updated)
                             } else {
-                                val lateBy = now.toEpochMilli() - intendedToday.toEpochMilli()
+                                val lateBy = now.toEpochMilli() - intended.toEpochMilli()
                                 val graceMillis = 2L * 60 * 60 * 1000 // ~2h grace window
                                 if (lateBy <= graceMillis) {
-                                    // Recently missed during downtime: fire it now.
-                                    val serviceIntent = Intent(context, AlarmService::class.java).apply {
+                                    // Recently missed during downtime: fire it now — but NOT by starting the
+                                    // mediaPlayback foreground service directly from this boot/time-change
+                                    // broadcast (blocked on Android 12+; that FGS type is not boot-exempt and
+                                    // would silently degrade to a non-ongoing notification). Instead schedule
+                                    // an immediate exact alarm: AlarmManager-driven broadcasts get the
+                                    // temporary FGS-start allowlist exemption, so AlarmReceiver's existing
+                                    // startForegroundService -> AlarmService.startForeground path rings with
+                                    // full audio + full-screen intent as usual.
+                                    val fireIntent = Intent(context, AlarmReceiver::class.java).apply {
                                         putExtra("ALARM_ID", updated.id)
                                         putExtra("ALARM_TITLE", updated.title)
                                         putExtra("ALARM_TYPE", updated.alarmType)
                                     }
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                        context.startForegroundService(serviceIntent)
-                                    } else {
-                                        context.startService(serviceIntent)
-                                    }
+                                    val firePending = PendingIntent.getBroadcast(
+                                        context,
+                                        updated.id,
+                                        fireIntent,
+                                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                                    )
+                                    val alarmManager =
+                                        context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                                    alarmManager.setExactAndAllowWhileIdle(
+                                        AlarmManager.RTC_WAKEUP,
+                                        now.toEpochMilli() + 1000L,
+                                        firePending
+                                    )
                                     database.alarmDao().updateAlarm(updated.copy(active = false))
                                 } else {
                                     // Past the grace window: mark missed instead of firing a day late.

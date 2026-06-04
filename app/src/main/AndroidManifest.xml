@@ -20,11 +20,13 @@
 
     <!-- Foreground services and types -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- An alarm ringer is not media playback; use SPECIAL_USE so Android 14+ does not
+         impose mediaPlayback/MediaSession restrictions (and Play does not flag the type). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -48,11 +50,17 @@
             </intent-filter>
         </activity>
 
-        <!-- Background active alarm ringing companion service -->
+        <!-- Background active alarm ringing companion service.
+             specialUse (not mediaPlayback): this FGS only rings/vibrates an alarm; it has no
+             active MediaSession, so mediaPlayback would be the wrong type on Android 14+. -->
         <service
             android:name=".alarm.scheduling.AlarmService"
-            android:foregroundServiceType="mediaPlayback"
-            android:exported="false" />
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Plays the alarm sound and vibration while a scheduled alarm is firing." />
+        </service>
 
         <!-- Intelligent continuous travel tracking location service -->
         <service
@@ -65,7 +73,15 @@
             android:name=".alarm.scheduling.AlarmReceiver"
             android:exported="false" />
 
-        <!-- Device reboot recovery scheduling receiver -->
+        <!-- Reschedule recovery receiver: re-arms / recalibrates alarms after the device
+             reboots or its timezone changes.
+             NOTE: ACTION_TIME_CHANGED is intentionally NOT listed here. It is a
+             registration-only ("protected") broadcast that the OS will silently never
+             deliver to a manifest receiver, so declaring it would give false confidence.
+             A manual wall-clock change is handled by the dynamically-registered receiver
+             in MainActivity while the app process is alive; out-of-process clock changes
+             are corrected on the next app open / boot / timezone change (and, where added,
+             a periodic WorkManager recalibration pass). -->
         <receiver
             android:name=".alarm.scheduling.RescheduleReceiver"
             android:exported="true">

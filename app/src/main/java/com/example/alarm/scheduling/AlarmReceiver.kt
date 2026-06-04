@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import com.example.alarm.data.AppDatabase
+import com.example.alarm.data.SunAlarmResolver
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -18,6 +19,9 @@ class AlarmReceiver : BroadcastReceiver() {
         // Forwarded so AlarmService can give the exact-alarm companion ring a distinct
         // notification id / request codes (set on the exact PendingIntent by AlarmScheduler).
         val isExactAlso = intent.getBooleanExtra("IS_EXACT_ALSO", false)
+        // Forwarded so AlarmService's initial foreground notification renders the correct action set
+        // (no Snooze when disabled) without waiting for the post-hoc DB lookup to re-post it.
+        val snoozeEnabled = intent.getBooleanExtra("ALARM_SNOOZE_ENABLED", true)
 
         Log.d("AlarmReceiver", "Alarm fired! Id: $alarmId, Title: $alarmTitle, Type: $alarmType")
 
@@ -27,6 +31,7 @@ class AlarmReceiver : BroadcastReceiver() {
             putExtra("ALARM_TITLE", alarmTitle)
             putExtra("ALARM_TYPE", alarmType)
             putExtra("IS_EXACT_ALSO", isExactAlso)
+            putExtra("ALARM_SNOOZE_ENABLED", snoozeEnabled)
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -43,8 +48,20 @@ class AlarmReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 if (alarmId != -1) {
-                    val a = AppDatabase.getDatabase(context).alarmDao().getAlarmById(alarmId)
-                    if (a != null && a.active && a.isRepeating()) AlarmScheduler(context).schedule(a)
+                    val dao = AppDatabase.getDatabase(context).alarmDao()
+                    val a = dao.getAlarmById(alarmId)
+                    if (a != null && a.active && a.isRepeating()) {
+                        // Recalibrate against the alarm's OWN location before re-arming so the persisted
+                        // hour/minute (read by the dashboard's "next ring" text) matches the next
+                        // scheduled instant immediately, instead of showing yesterday's sun time until a
+                        // later recalibrate pass. CUSTOM/unbound alarms pass through unchanged.
+                        val own = SunAlarmResolver.Location(
+                            a.latitude, a.longitude, a.timezoneOffset, a.locationName
+                        )
+                        val updated = SunAlarmResolver.recalibrate(a, own)
+                        if (updated !== a) dao.updateAlarm(updated)
+                        AlarmScheduler(context).schedule(updated)
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("AlarmReceiver", "re-arm failed", e)

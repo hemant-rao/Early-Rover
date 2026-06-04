@@ -44,6 +44,7 @@ class AlarmScheduler(private val context: Context) {
             putExtra("ALARM_ID", alarm.id)
             putExtra("ALARM_TITLE", alarm.title)
             putExtra("ALARM_TYPE", alarm.alarmType)
+            putExtra("ALARM_SNOOZE_ENABLED", alarm.snoozeEnabled)
         }
         val pendingIntentOffset = PendingIntent.getBroadcast(
             context,
@@ -56,14 +57,21 @@ class AlarmScheduler(private val context: Context) {
         
         // Also schedule exact time if requested and offset is present
         if (alarm.ringAtExactAlso && alarm.offsetMinutes != 0 && (alarm.alarmType == "SUNRISE" || alarm.alarmType == "SUNSET")) {
-            val targetCalExact = targetCal.clone() as Calendar
-            targetCalExact.add(Calendar.MINUTE, -alarm.offsetMinutes) // revert the offset
+            // Compute the exact companion's OWN next strictly-future occurrence rather than
+            // subtracting the offset from the offset-ring's target. Subtracting the offset can
+            // yield a moment already in the past (e.g. real sunrise when now is between sunrise
+            // and sunrise+offset), causing the exact companion to fire immediately. Resolving an
+            // offset-free copy guarantees a strictly-future instant, honors repeat weekdays and
+            // skipDate, and recomputes the correct per-day sun time.
+            val exactAlarm = alarm.copy(offsetMinutes = 0)
+            val targetCalExact = getNextOccurrence(exactAlarm)
             
             val intentExact = Intent(context, AlarmReceiver::class.java).apply {
                 putExtra("ALARM_ID", alarm.id)
                 putExtra("ALARM_TITLE", alarm.title.ifEmpty { if (alarm.alarmType == "SUNRISE") "Sunrise Exact" else "Sunset Exact" })
                 putExtra("ALARM_TYPE", alarm.alarmType)
                 putExtra("IS_EXACT_ALSO", true)
+                putExtra("ALARM_SNOOZE_ENABLED", alarm.snoozeEnabled)
             }
             // Use negative ID to distinguish pending intent
             val exactReqId = -alarm.id 
