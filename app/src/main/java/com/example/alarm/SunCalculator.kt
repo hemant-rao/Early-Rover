@@ -48,11 +48,11 @@ object SunCalculator {
         
         val cosH = (cos(zenithRad) / (cos(latRad) * cos(decl))) - (tan(latRad) * tan(decl))
         
-        if (cosH > 1.0) {
-            // Polar night (sun never rises)
+        if (cosH >= 1.0) {
+            // Polar night (sun never rises; boundary = sun grazes horizon at noon)
             return SunTimes(null, null, PolarState.POLAR_NIGHT)
         }
-        if (cosH < -1.0) {
+        if (cosH <= -1.0) {
             // Polar day (sun never sets)
             return SunTimes(null, null, PolarState.POLAR_DAY)
         }

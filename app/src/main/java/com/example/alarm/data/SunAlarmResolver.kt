@@ -127,25 +127,28 @@ object SunAlarmResolver {
         val repeatDays = alarm.getRepeatDaysList()
 
         if (repeatDays.isEmpty()) {
-            val todayFire = today.atTime(fireTimeOn(alarm, today)).atZone(zone).toInstant()
+            val todayFire = fireDateTimeOn(alarm, today).atZone(zone).toInstant()
             return if (todayFire.isAfter(now)) todayFire
             else {
                 val tomorrow = today.plusDays(1)
-                tomorrow.atTime(fireTimeOn(alarm, tomorrow)).atZone(zone).toInstant()
+                fireDateTimeOn(alarm, tomorrow).atZone(zone).toInstant()
             }
         }
 
         // Repeating: nearest selected weekday whose time is strictly in the future.
         // java.time DayOfWeek.value is 1=Mon..7=Sun, matching this app's repeat-day scheme.
+        // Match the weekday against the sun-event day the user selected; the resulting fire INSTANT
+        // may still shift to the previous calendar day for a large negative offset (handled inside
+        // fireDateTimeOn), which is the astronomically correct moment.
         for (add in 0..7) {
             val day = today.plusDays(add.toLong())
             if (repeatDays.contains(day.dayOfWeek.value)) {
-                val fire = day.atTime(fireTimeOn(alarm, day)).atZone(zone).toInstant()
+                val fire = fireDateTimeOn(alarm, day).atZone(zone).toInstant()
                 if (fire.isAfter(now)) return fire
             }
         }
         // Unreachable in practice (a non-empty repeat set always matches within 8 days).
-        return today.atTime(fireTimeOn(alarm, today)).atZone(zone).toInstant()
+        return fireDateTimeOn(alarm, today).atZone(zone).toInstant()
     }
 
     /**
@@ -156,11 +159,24 @@ object SunAlarmResolver {
      * CUSTOM and unbound alarms the stored clock digits are authoritative and returned as-is.
      */
     fun fireTimeOn(alarm: Alarm, date: LocalDate): LocalTime =
+        fireDateTimeOn(alarm, date).toLocalTime()
+
+    /**
+     * The full date+time [alarm] should fire at, for the sun event of [date], in its own zone's terms.
+     *
+     * Unlike [fireTimeOn] this preserves the day-shift that [targetTime] applies for a negative
+     * [Alarm.offsetMinutes] that pushes the moment before midnight: e.g. a high-latitude sunrise at
+     * 00:10 with a -30 'before' offset belongs astronomically to the PREVIOUS calendar day at 23:40.
+     * The scheduler uses this (not [fireTimeOn]) so that previous-day rollover is honored instead of
+     * being re-attached to the query date. For CUSTOM and unbound alarms the stored clock digits on
+     * the given date are authoritative.
+     */
+    fun fireDateTimeOn(alarm: Alarm, date: LocalDate): LocalDateTime =
         if ((alarm.alarmType == "SUNRISE" || alarm.alarmType == "SUNSET") && alarm.hasLocation()) {
             val loc = Location(alarm.latitude, alarm.longitude, alarm.timezoneOffset, alarm.locationName)
-            targetTime(alarm.alarmType, loc, date, alarm.offsetMinutes).toLocalTime()
+            targetTime(alarm.alarmType, loc, date, alarm.offsetMinutes)
         } else {
-            LocalTime.of(alarm.hour, alarm.minute)
+            date.atTime(alarm.hour, alarm.minute)
         }
 
     /** The zone an alarm's stored hour/minute must be interpreted in. */
