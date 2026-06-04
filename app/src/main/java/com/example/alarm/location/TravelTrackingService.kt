@@ -49,6 +49,14 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
     private var vibrator: Vibrator? = null
     private var arrivalWakeLock: android.os.PowerManager.WakeLock? = null
 
+    // Set true the moment teardown begins (ACTION_STOP / onDestroy). A queued
+    // onLocationResult can still fire after serviceScope is cancelled but before
+    // removeLocationUpdates lands; this flag stops it from re-writing the static
+    // StateFlows (current location/speed) that cleanupResources just reset, which
+    // would otherwise leave stale tracking values visible in the UI.
+    @Volatile
+    private var stopped = false
+
     // Ids of alarms that have already fired this session, so a single arrival doesn't
     // re-trigger on every 3-6s location update while still inside the radius.
     private val triggeredAlarmIds = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
@@ -135,6 +143,7 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service Created")
+        stopped = false
         _isTracking.value = true
         _statusMessage.value = "Locating GPS Satellite..."
 
@@ -209,6 +218,10 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
 
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
+                // Teardown may have begun (scope cancelled, flows reset) while this
+                // callback was already queued; drop it so we don't resurrect stale
+                // tracking state after the service stopped.
+                if (stopped) return
                 val location = locationResult.lastLocation ?: return
 
                 // Always update live location/speed/UI even for a coarse fix, so the UI never
@@ -598,6 +611,11 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
     // individually guarded, and lateinit fields are only touched once initialized, so an
     // early/very-fast stop can never crash the process with UninitializedPropertyAccessException.
     private fun cleanupResources() {
+        // Mark teardown in progress FIRST so any location callback already queued on
+        // the main looper bails out before it can re-write the static StateFlows that
+        // we reset just below.
+        stopped = true
+
         // Cancel in-flight coroutines (IO DB writes, the flashlight blink loop) FIRST so they
         // stop before the static StateFlows below are reset and the torch is forced off. The
         // blink loop's delay(400) is a cancellation point, so the flashlight stops promptly.

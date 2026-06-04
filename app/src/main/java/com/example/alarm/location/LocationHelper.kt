@@ -240,10 +240,10 @@ class LocationHelper(private val context: Context) {
                     }
                     
                     if (lat != 0.0 || lng != 0.0) {
-                        if (cancelled.get()) return@Thread
+                        if (cancelled.get() || !isAutoDetectEnabled()) return@Thread
                         saveLocation(lat, lng, timezoneOffset, name)
                         android.os.Handler(android.os.Looper.getMainLooper()).post {
-                            if (cancelled.get()) return@post
+                            if (cancelled.get() || !isAutoDetectEnabled()) return@post
                             onSuccess(lat, lng, timezoneOffset, name)
                         }
                         return@Thread
@@ -279,7 +279,15 @@ class LocationHelper(private val context: Context) {
                         val city = json2.optString("cityName", "")
                         val country = json2.optString("countryCode", "")
 
-                        val timezoneOffset = Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
+                        // Mirror the ipapi.co branch: resolve the RAW/standard offset from the
+                        // real IANA zone (no DST) instead of the crude longitude/15 estimate,
+                        // which is wrong for half/quarter-hour zones (India +5.5, Nepal +5.45).
+                        // freeipapi returns IANA ids in `timeZones` (array) and may also return
+                        // `timeZone` either as an IANA id or as an offset string like "+05:30".
+                        val ianaId = json2.optJSONArray("timeZones")?.optString(0).orEmpty()
+                            .ifEmpty { json2.optString("timeZone", "") }
+                        val timezoneOffset = parseTimezoneOffset(ianaId)
+                            ?: Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
                         val name = if (city.isNotEmpty() && country.isNotEmpty()) {
                             "$city, $country"
                         } else if (city.isNotEmpty()) {
@@ -289,10 +297,10 @@ class LocationHelper(private val context: Context) {
                         }
 
                         if (lat != 0.0 || lng != 0.0) {
-                            if (cancelled.get()) return@Thread
+                            if (cancelled.get() || !isAutoDetectEnabled()) return@Thread
                             saveLocation(lat, lng, timezoneOffset, name)
                             android.os.Handler(android.os.Looper.getMainLooper()).post {
-                                if (cancelled.get()) return@post
+                                if (cancelled.get() || !isAutoDetectEnabled()) return@post
                                 onSuccess(lat, lng, timezoneOffset, name)
                             }
                             return@Thread
@@ -401,11 +409,11 @@ class LocationHelper(private val context: Context) {
                 detectedName = String.format(java.util.Locale.US, "GPS: %.4f, %.4f", lat, lng)
             }
             
-            if (cancelled.get()) return@Thread
+            if (cancelled.get() || !isAutoDetectEnabled()) return@Thread
             saveLocation(lat, lng, roundedTzOffset, detectedName)
 
             android.os.Handler(android.os.Looper.getMainLooper()).post {
-                if (cancelled.get()) return@post
+                if (cancelled.get() || !isAutoDetectEnabled()) return@post
                 onSuccess(lat, lng, roundedTzOffset, detectedName)
             }
         }.start()
@@ -446,6 +454,70 @@ class LocationHelper(private val context: Context) {
             }
         } catch (e: SecurityException) {
             onFailure(e)
+        }
+    }
+
+    // Converts a freeipapi/IANA timezone token into a RAW (no-DST) hour offset.
+    // Accepts either an IANA id ("Asia/Kolkata") -> TimeZone.rawOffset, or an offset
+    // string ("+05:30" / "UTC+5:30" / "+0530"). Returns null when unparseable so the
+    // caller can fall back to a longitude estimate.
+    private fun parseTimezoneOffset(token: String): Double? {
+        if (token.isBlank()) return null
+        val t = token.trim()
+        // Offset string form, e.g. "+05:30", "-08:00", "+0530", "UTC+5:30".
+        val offsetRegex = Regex("([+-])(\\d{1,2})(?::?(\\d{2}))?")
+        if (t.contains('/') || t.equals("UTC", ignoreCase = true) || t.equals("GMT", ignoreCase = true)) {
+            // Looks like an IANA id (or bare UTC/GMT) -> use raw offset.
+            return try {
+                val tz = java.util.TimeZone.getTimeZone(t)
+                // getTimeZone returns GMT for unknown ids; only trust a real match or UTC/GMT.
+                if (tz.id.equals(t, ignoreCase = true) || t.equals("UTC", ignoreCase = true) || t.equals("GMT", ignoreCase = true)) {
+                    tz.rawOffset / (1000.0 * 60.0 * 60.0)
+                } else null
+            } catch (e: Exception) {
+                null
+            }
+        }
+        val m = offsetRegex.find(t) ?: return null
+        return try {
+            val sign = if (m.groupValues[1] == "-") -1.0 else 1.0
+            val hours = m.groupValues[2].toDouble()
+            val minutes = m.groupValues[3].toDoubleOrNull() ?: 0.0
+            (sign * (hours + minutes / 60.0)).coerceIn(-12.0, 14.0)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // Resolves the real IANA standard (no-DST) offset for coordinates via Open-Meteo's
+    // free timezone lookup, mirroring the primary geocoder branch's TimeZone.rawOffset
+    // semantics. Returns null on any failure so callers refuse to persist a guess.
+    // Must be called off the main thread (performs blocking network I/O).
+    private fun resolveTimezoneOffset(lat: Double, lng: Double): Double? {
+        return try {
+            val url = URL(
+                "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lng" +
+                    "&timezone=auto&forecast_days=1"
+            )
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 4000
+            connection.readTimeout = 4000
+            connection.setRequestProperty("User-Agent", "SolarAlarmApp")
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val reader = BufferedReader(InputStreamReader(connection.inputStream))
+            val response = StringBuilder()
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                response.append(line)
+            }
+            reader.close()
+            val json = JSONObject(response.toString())
+            val tzId = json.optString("timezone", "")
+            parseTimezoneOffset(tzId)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
         }
     }
 
@@ -542,12 +614,16 @@ class LocationHelper(private val context: Context) {
                     val name = if (parts.isNotEmpty()) parts[0].trim() else ""
                     val country = if (parts.size > 1) parts[parts.size - 1].trim() else ""
                     
-                    var tzOffset = Math.round(longitude / 15.0).toDouble()
-                    if (displayName.contains("India", ignoreCase = true) || country.contains("India", ignoreCase = true)) {
-                        tzOffset = 5.5
-                    }
-                    
-                    if (name.isNotEmpty()) {
+                    // Resolve the real IANA standard offset for these coordinates instead of
+                    // the crude longitude/15 estimate (which is wrong for half/quarter-hour
+                    // and politically-shifted zones: Adelaide +9.5, Kathmandu +5.45, Tehran
+                    // +3.5, Newfoundland -3.5). This city is persisted verbatim into saved
+                    // cities, so the offset must match the primary Open-Meteo branch's
+                    // TimeZone.rawOffset semantics. Skip the entry if no zone can be resolved
+                    // rather than saving a longitude-derived guess.
+                    val tzOffset = resolveTimezoneOffset(latitude, longitude)
+
+                    if (name.isNotEmpty() && tzOffset != null) {
                         cities.add(CityInfo(name, country, latitude, longitude, tzOffset))
                     }
                 }
