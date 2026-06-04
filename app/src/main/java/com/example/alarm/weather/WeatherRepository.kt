@@ -66,7 +66,8 @@ data class DetailedWeatherInfo(
     val precipitationMm: Double,
     val windSpeedKmh: Double,
     val hourlyList: List<HourlyDetail>,
-    val dailyList: List<DailyDetail>
+    val dailyList: List<DailyDetail>,
+    val timezoneOffset: Double? = null
 )
 
 /**
@@ -177,6 +178,9 @@ object WeatherRepository {
 
             val response = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
             val root = JSONObject(response)
+            
+            val utcOffsetSeconds = root.optInt("utc_offset_seconds", Int.MAX_VALUE)
+            val tzOffset = if (utcOffsetSeconds != Int.MAX_VALUE) utcOffsetSeconds / 3600.0 else null
 
             val currentJson = root.optJSONObject("current") ?: return@withContext null
             val code = currentJson.optInt("weather_code", -1)
@@ -268,7 +272,8 @@ object WeatherRepository {
                 precipitationMm = precipitation,
                 windSpeedKmh = windSpeed,
                 hourlyList = hourlyList,
-                dailyList = dailyList
+                dailyList = dailyList,
+                timezoneOffset = tzOffset
             )
         } catch (e: Exception) {
             e.printStackTrace()

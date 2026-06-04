@@ -29,6 +29,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.res.stringResource
 import com.example.R
+import com.example.ui.AppLogo
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -87,12 +88,7 @@ fun SplashScreen(onNavigateToDashboard: () -> Unit) {
                         .size(90.dp)
                         .background(SleekSecondary.copy(alpha = 0.18f), shape = CircleShape)
                 )
-                Icon(
-                    imageVector = Icons.Default.WbSunny,
-                    contentDescription = stringResource(id = R.string.app_name),
-                    tint = SleekSolarAccent,
-                    modifier = Modifier.size(56.dp)
-                )
+                AppLogo(modifier = Modifier.size(56.dp))
             }
             Spacer(modifier = Modifier.height(24.dp))
             Text(
@@ -105,7 +101,7 @@ fun SplashScreen(onNavigateToDashboard: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Astronomical Sun Tracker & Alarms",
+                text = "Never Miss the Moment.",
                 fontSize = 14.sp,
                 color = SleekMutedText,
                 fontWeight = FontWeight.Medium,

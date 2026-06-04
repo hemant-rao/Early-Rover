@@ -22,6 +22,9 @@ import android.os.VibratorManager
 import android.speech.tts.TextToSpeech
 import android.util.Log
 import android.content.pm.ServiceInfo
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import android.Manifest
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.example.MainActivity
@@ -223,6 +226,14 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
     @SuppressLint("MissingPermission")
     private fun startLocationTracking() {
         Log.d(TAG, "Starting location requests")
+        
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Log.e(TAG, "Location permissions not granted")
+            _statusMessage.value = "GPS Error. Check location permission."
+            return
+        }
+
         val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
             6000L // 6 seconds battery-balanced interval
@@ -472,16 +483,28 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
     private fun playSirenAlarm() {
         if (mediaPlayer == null) {
             try {
+                // Get default alarm sound
                 var alarmUri: Uri? = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                if (alarmUri == null) {
+                    alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                }
                 if (alarmUri == null) {
                     alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
                 }
+                
+                // Maximize alarm volume briefly for the arrival
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+                audioManager?.let {
+                    val maxVol = it.getStreamMaxVolume(android.media.AudioManager.STREAM_ALARM)
+                    it.setStreamVolume(android.media.AudioManager.STREAM_ALARM, maxVol, 0)
+                }
+
                 mediaPlayer = MediaPlayer().apply {
                     setDataSource(this@TravelTrackingService, alarmUri!!)
                     setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build()
                     )
                     isLooping = true
@@ -490,6 +513,17 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error playing audio siren alarm", e)
+                try {
+                    // Ultimate fallback if MediaPlayer fails
+                    val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    val ringtone = RingtoneManager.getRingtone(applicationContext, ringtoneUri)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        ringtone.isLooping = true
+                    }
+                    ringtone.play()
+                } catch (rpe: Exception) {
+                    Log.e(TAG, "Ringtone fallback also failed", rpe)
+                }
             }
         }
     }
@@ -635,16 +669,13 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
         stopped = true
 
         // Deterministically wait for the flashlight-blink coroutine to FULLY terminate before
-        // anything else. Its finally block forces the torch off as its last action, so joining
-        // here (cancelAndJoin) guarantees the synchronous force-off below happens-after the
-        // coroutine's own torch writes, eliminating the last-write-wins race that could leave
-        // the torch stuck ON. The blink loop's delay(400) is the cancellation point.
+        // anything else. Its finally block forces the torch off as its last action, so we
+        // cancel it — the finally block is guaranteed to run after cancellation, safely
+        // forcing the torch off.
         try {
-            blinkJob?.let { job ->
-                runBlocking { job.cancelAndJoin() }
-            }
+            blinkJob?.cancel()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed cancelling/joining flashlight blink job", e)
+            Log.e(TAG, "Failed cancelling flashlight blink job", e)
         }
         blinkJob = null
 

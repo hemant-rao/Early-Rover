@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.alarm.viewmodel.AlarmViewModel
 import com.example.ui.theme.*
+import com.example.ui.AppLogo
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -84,6 +85,9 @@ fun LocationSettingsScreen(
                     IconButton(onClick = onNavigateBack, modifier = Modifier.testTag("loc_back_button")) {
                         Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = viewModel.translate("Go back"), tint = SleekActiveText)
                     }
+                },
+                actions = {
+                    AppLogo(modifier = Modifier.size(24.dp).padding(end = 8.dp))
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent

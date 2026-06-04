@@ -65,6 +65,8 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         cleared = true
         locationHelper.cancelLocationRequest()
+        weatherJob?.cancel()
+        recalcJob?.cancel()
         super.onCleared()
     }
 
@@ -256,43 +258,43 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "Vibration" to "वाइब्रेशन (कंपन)",
         "Vibrate during alarm trigger sequence" to "अलार्म बजने पर फ़ोन वाइब्रेट करें",
         "Snooze Awake" to "अलार्म फिर से बजने का समय (स्नूज़)",
-        "Snooze pause duration" to "स्नूज़ विराम अवधि",
+        "Snooze pause duration" to "स्नूज़ का समय",
         "mins" to "मिनट",
-        "Confirm Schedule Settings" to "अलार्म सुरक्षित (सेव) करें",
+        "Confirm Schedule Settings" to "अलार्म सेव करें",
         "SUNSET" to "सूर्यास्त",
         "SUNRISE" to "सूर्योदय",
-        "CUSTOM" to "मानक घड़ी",
-        "DASH" to "मुख्य पृष्ठ",
-        "LOCATION" to "स्थान चुनें",
+        "CUSTOM" to "सामान्य घड़ी",
+        "DASH" to "होम",
+        "LOCATION" to "स्थान सेटिंग्स",
         "SETTINGS" to "सेटिंग्स",
         "Settings" to "सेटिंग्स",
-        "Preferences & Appearance" to "प्राथमिकताएं और थीम",
+        "Preferences & Appearance" to "सेटिंग्स और थीम",
         "Dark Mode" to "डार्क मोड",
         "Light" to "लाइट",
         "Dark" to "डार्क",
         "Auto" to "ऑटो",
-        "Render dark celestial color profiles" to "गहरे खगोलीय रंग प्रोफ़ाइल दिखाएं",
-        "Applying language…" to "भाषा लागू की जा रही है…",
+        "Render dark celestial color profiles" to "गहरी रंग थीम चालू करें",
+        "Applying language…" to "भाषा बदल रही है…",
         // Full-screen alarm ring screen
-        "SOLARIS ALERT TRIGGERED" to "सोलारिस अलर्ट सक्रिय",
-        "SECURE ARRIVAL SENTRY DETECTED" to "सुरक्षित आगमन सेंट्री पहचाना",
-        "Dynamic Daylight Call" to "डायनेमिक डेलाइट कॉल",
-        "Solar Sunrise Synchronized Alarm" to "सौर सूर्योदय समकालिक अलार्म",
-        "Solar Sunset Synchronized Alarm" to "सौर सूर्यास्त समकालिक अलार्म",
-        "Wayfarer Transit Arrival Security" to "यात्रा आगमन सुरक्षा",
-        "Standard Trigger Clock" to "मानक ट्रिगर घड़ी",
-        "DISMISS ALARM" to "अलार्म खारिज करें",
-        "ARRIVED - DISMISS ALARM" to "पहुँच गए - अलार्म खारिज करें",
+        "SOLARIS ALERT TRIGGERED" to "अलार्म बज रहा है",
+        "SECURE ARRIVAL SENTRY DETECTED" to "मंज़िल आ गई है",
+        "Dynamic Daylight Call" to "दिन की शुरुआत",
+        "Solar Sunrise Synchronized Alarm" to "सूर्योदय का अलार्म",
+        "Solar Sunset Synchronized Alarm" to "सूर्यास्त का अलार्म",
+        "Wayfarer Transit Arrival Security" to "यात्रा आगमन अलार्म",
+        "Standard Trigger Clock" to "सामान्य अलार्म घड़ी",
+        "DISMISS ALARM" to "अलार्म बंद करें",
+        "ARRIVED - DISMISS ALARM" to "पहुँच गए - अलार्म बंद करें",
         "SNOOZE WAKE" to "स्नूज़ करें",
         // Dashboard hero, travel cards, repeat presets, and skip/turn-off dialog
         "Wake with the Sun" to "सूरज के साथ जागें",
-        "Alarms synced to sunrise & sunset at your exact location." to "आपके सटीक स्थान के सूर्योदय और सूर्यास्त के साथ समकालिक अलार्म।",
-        "Journey Active" to "यात्रा सक्रिय",
-        "Tracking" to "ट्रैकिंग",
-        "Add Travel Alarm" to "यात्रा अलार्म जोड़ें",
-        "Get woken when you near your destination." to "गंतव्य के पास पहुँचने पर जागें।",
+        "Alarms synced to sunrise & sunset at your exact location." to "आपके इलाके में सूरज निकलने और ढलने के हिसाब से बजेगा।",
+        "Journey Active" to "यात्रा चालू है",
+        "Tracking" to "लोकेशन ट्रैक हो रही है",
+        "Add Travel Alarm" to "यात्रा का अलार्म लगाएँ",
+        "Get woken when you near your destination." to "अपनी मंज़िल के पास पहुँचने पर जागें।",
         "Turn off this alarm?" to "यह अलार्म बंद करें?",
-        "This alarm repeats. Skip just the next occurrence, or turn it off completely?" to "यह अलार्म दोहराता है। केवल अगली बार छोड़ें, या इसे पूरी तरह बंद करें?",
+        "This alarm repeats. Skip just the next occurrence, or turn it off completely?" to "यह अलार्म हर रोज़ बजता है। क्या आप इसे केवल अगली बार के लिए छोड़ना चाहते हैं, या पूरी तरह बंद करना चाहते हैं?",
         "Skip today only" to "केवल आज छोड़ें",
         "Turn off completely" to "पूरी तरह बंद करें",
         "Cancel" to "रद्द करें",
@@ -301,61 +303,61 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "Custom" to "कस्टम",
         "Sunrise" to "सूर्योदय",
         "Sunset" to "सूर्यास्त",
-        "Add Standard Alarm" to "मानक अलार्म जोड़ें",
-        "Use the Sunrise/Sunset cards above or the Add Standard Alarm button to schedule alarms." to "अलार्म सेट करने के लिए ऊपर सूर्योदय/सूर्यास्त कार्ड या मानक अलार्म जोड़ें बटन का उपयोग करें।",
+        "Add Standard Alarm" to "सामान्य अलार्म जोड़ें",
+        "Use the Sunrise/Sunset cards above or the Add Standard Alarm button to schedule alarms." to "अलार्म सेट करने के लिए सूर्योदय/सूर्यास्त या सामान्य अलार्म बटन का उपयोग करें।",
         "Type city name..." to "शहर का नाम लिखें...",
-        "ACTIVE LOCATIONS HUB" to "सक्रिय स्थान केंद्र",
+        "ACTIVE LOCATIONS HUB" to "लोकेशन सेटिंग्स",
         "Default Snooze Duration" to "डिफ़ॉल्ट स्नूज़ समय",
         "Select Language" to "भाषा चुनें (Language)",
-        "Only English & Hindi are fully translated; other languages change date/number format only." to "केवल अंग्रेज़ी और हिंदी का पूरा अनुवाद उपलब्ध है; अन्य भाषाएँ केवल तारीख/संख्या प्रारूप बदलती हैं।",
-        "Where are you? Type city name here..." to "आप कहाँ हैं? शहर ढूंढें...",
-        "Search city (e.g. Reykjavik, London, Tokyo...)" to "शहर का नाम (जैसे: दिल्ली, मुम्बई, टोक्यो...)",
-        "Use My Current Phone Location (GPS)" to "अपने फ़ोन के GPS/स्थान का उपयोग करें",
-        "Location permission denied. Enable it in Settings or search a city below." to "स्थान की अनुमति अस्वीकृत। इसे सेटिंग्स में चालू करें या नीचे शहर खोजें।",
-        "Instantly adjust to where you are standing." to "सटीक रूप से अपने वर्तमान स्थान का उपयोग करें।",
-        "Why set location?" to "स्थान चुनना क्यों ज़रूरी है?",
-        "We calculate the exact sunrise and sunset times automatically for your location, even without internet!" to "हम बिना इंटरनेट के भी आपके स्थान के लिए सूर्योदय और सूर्यास्त का बिल्कुल सटीक समय ऑन-डिवाइस निकालते हैं!",
-        "Trigger exactly during event (Sunrise/Sunset)" to "मौसम घटना के समय बिल्कुल सटीक बजाएं (सूर्योदय/सूर्यास्त होने पर)",
-        "Fires at the precise moment of astronomical rise/set" to "सटीक उदय या अस्त के समय अलार्म बजाएं",
-        "Configure Clock Time" to "घड़ी का सटीक समय चुनें",
-        "Based on location, triggers today at" to "स्थान की गणना से, आज अलार्म बजेगा: ",
-        "CURRENT COORDINATES" to "वर्तमान स्थान विवरण",
-        "Manual Search Lookup" to "मैन्युअल शहर खोजें",
-        "Offline Astronomical Security" to "ऑफ़लाइन भौगोलिक सुरक्षा",
+        "Only English & Hindi are fully translated; other languages change date/number format only." to "केवल अंग्रेज़ी और हिंदी में पूरा अनुवाद है; बाकी सिर्फ़ तारीख/नंबर का तरीक़ा बदलेंगी।",
+        "Where are you? Type city name here..." to "आप कहाँ हैं? अपने शहर का नाम लिखें...",
+        "Search city (e.g. Reykjavik, London, Tokyo...)" to "शहर खोजें (जैसे: दिल्ली, मुम्बई...)",
+        "Use My Current Phone Location (GPS)" to "मेरे फ़ोन का वर्तमान स्थान (जीपीएस) इस्तेमाल करें",
+        "Location permission denied. Enable it in Settings or search a city below." to "लोकेशन की अनुमति नहीं मिली। इसे सेटिंग्स से चालू करें या नीचे शहर का नाम खोजें।",
+        "Instantly adjust to where you are standing." to "ऑटोमैटिक आपकी मौजूद जगह ले लेगा।",
+        "Why set location?" to "लोकेशन चुनना क्यों ज़रूरी है?",
+        "We calculate the exact sunrise and sunset times automatically for your location, even without internet!" to "हम बिना इंटरनेट के भी आपके स्थान के हिसाब से सूर्योदय और सूर्यास्त का बिल्कुल सही समय निकालते हैं!",
+        "Trigger exactly during event (Sunrise/Sunset)" to "ठीक सूर्योदय या सूर्यास्त के समय अलार्म बजाएँ",
+        "Fires at the precise moment of astronomical rise/set" to "सटीक उदय या अस्त के समय बजेगा",
+        "Configure Clock Time" to "अलार्म का समय सेट करें",
+        "Based on location, triggers today at" to "लोकेशन के हिसाब से, आज बजेगा: ",
+        "CURRENT COORDINATES" to "वर्तमान स्थान जानकारी",
+        "Manual Search Lookup" to "मैन्युअल रूप से शहर खोजें",
+        "Offline Astronomical Security" to "ऑफ़लाइन अलर्ट सिस्टम",
         "GPS Location Detected" to "जीपीएस द्वारा स्थान मिला",
-        "Next Alarm" to "अगला सूचना/अलार्म",
-        "No Alarms Scheduled" to "कोई अलार्म निर्धारित नहीं है",
-        "SOLARIS LIVE" to "लाइव संरेखण",
+        "Next Alarm" to "अगला अलार्म",
+        "No Alarms Scheduled" to "कोई अलार्म नहीं लगा है",
+        "SOLARIS LIVE" to "अर्ली रोवर लाइव",
         "Hour" to "घंटा",
         "Minute" to "मिनट",
-        "Go back" to "पीछे जाएं",
-        "Save" to "सुरक्षित करें",
-        "Delete" to "हटाएं",
-        "Active" to "सक्रिय",
-        "Inactive" to "निष्क्रिय",
+        "Go back" to "वापस जाएं",
+        "Save" to "सेव करें",
+        "Delete" to "डिलीट करें",
+        "Active" to "चालू",
+        "Inactive" to "बंद",
         "None" to "कोई नहीं",
-        "Trigger Offset" to "समय का अंतर (ओफ़्सेट)",
+        "Trigger Offset" to "अलार्म आगे/पीछे करें (अगर चाहें)",
         "Before" to "पहले",
         "After" to "बाद में",
-        "At Event" to "घटना के समय",
-        "AM" to "पूर्वाह्न (AM)",
-        "PM" to "अपराह्न (PM)",
-        "Ringtone" to "अलार्म टोन",
-        "Select Alarm Tone" to "अलार्म टोन चुनें",
-        "Alarm Tone" to "अलार्म टोन",
-        "Default Alarm" to "डिफ़ॉल्ट अलार्म",
-        "Default Alarm Sound" to "डिफ़ॉल्ट अलार्म ध्वनि",
+        "At Event" to "ठीक समय पर",
+        "AM" to "सुबह (AM)",
+        "PM" to "शाम (PM)",
+        "Ringtone" to "रिंगटोन",
+        "Select Alarm Tone" to "रिंगटोन चुनें",
+        "Alarm Tone" to "रिंगटोन",
+        "Default Alarm" to "डिफ़ॉल्ट अलार्म टोन",
+        "Default Alarm Sound" to "फ़ोन की डिफ़ॉल्ट अलार्म ध्वनि",
         // Settings reliability / about section (wrapped in translate() in SettingsScreen).
-        "ALARM SYSTEM RELIABILITY GUIDES" to "अलार्म विश्वसनीयता मार्गदर्शिका",
-        "Battery Optimizations Exclusions" to "बैटरी ऑप्टिमाइज़ेशन अपवाद",
-        "To guarantee the alarm triggers precisely on-time when the physical screen is off, newer Android versions require excluding the app from system-level battery optimizations." to "स्क्रीन बंद होने पर अलार्म ठीक समय पर बजे, इसके लिए नए Android संस्करणों में ऐप को सिस्टम-स्तरीय बैटरी ऑप्टिमाइज़ेशन से बाहर रखना आवश्यक है।",
-        "Go to system App Info -> Battery -> and select 'Unrestricted' for completely uninterrupted wake alarm service." to "सिस्टम App Info -> Battery पर जाएं और निर्बाध अलार्म सेवा के लिए 'Unrestricted' (अप्रतिबंधित) चुनें।",
-        "System Exact Alarm Permission" to "सिस्टम सटीक अलार्म अनुमति",
-        "Solari uses System Alarm Clock info APIs which list upcoming alerts on your lockscreen and bypass Silent / Do Not Disturb boundaries." to "Solari सिस्टम अलार्म क्लॉक API का उपयोग करता है जो आने वाले अलार्म लॉकस्क्रीन पर दिखाते हैं और साइलेंट / डू नॉट डिस्टर्ब सीमाओं को पार करते हैं।",
-        "If scheduled warnings seem deactivated, ensure 'Alarms & Reminders' permission is granted in the device settings panel." to "यदि निर्धारित अलार्म निष्क्रिय लगें, तो डिवाइस सेटिंग्स में 'Alarms & Reminders' अनुमति चालू होना सुनिश्चित करें।",
-        "SOLARIS ALARM COMPASS" to "सोलारिस अलार्म कम्पास",
-        "Version 1.0.0 (Concept Edition)" to "संस्करण 1.0.0 (कॉन्सेप्ट संस्करण)",
-        "Developed using modern Jetpack Compose, Room reactive databases, Alarm Clock APIs, and hardware-accelerated OpenGL ES 2.0 visualization." to "आधुनिक Jetpack Compose, Room रिएक्टिव डेटाबेस, Alarm Clock API और हार्डवेयर-त्वरित OpenGL ES 2.0 विज़ुअलाइज़ेशन का उपयोग करके विकसित।"
+        "ALARM SYSTEM RELIABILITY GUIDES" to "अलार्म काम करने के लिए ज़रूरी सेटिंग्स",
+        "Battery Optimizations Exclusions" to "बैटरी ऑप्टिमाइज़ेशन बंद करें",
+        "To guarantee the alarm triggers precisely on-time when the physical screen is off, newer Android versions require excluding the app from system-level battery optimizations." to "फ़ोन की स्क्रीन बंद होने पर भी अलार्म ठीक समय पर बजे, इसके लिए एंड्रॉयड सेटिंग्स से इस ऐप को बैटरी ऑप्टिमाइज़ेशन से हटाना ज़रूरी है।",
+        "Go to system App Info -> Battery -> and select 'Unrestricted' for completely uninterrupted wake alarm service." to "ऐप इन्फो (App Info) -> बैटरी पर जाएं और 'अनरेस्ट्रिक्टेड (Unrestricted)' चुनें।",
+        "System Exact Alarm Permission" to "सटीक अलार्म की अनुमति",
+        "Solari uses System Alarm Clock info APIs which list upcoming alerts on your lockscreen and bypass Silent / Do Not Disturb boundaries." to "Early Rover सिस्टम अलार्म की परमिशन लेता है ताकि अलार्म 'डू नॉट डिस्टर्ब' और 'साइलेंट' मोड पर भी ज़ोर से बज सके।",
+        "If scheduled warnings seem deactivated, ensure 'Alarms & Reminders' permission is granted in the device settings panel." to "अगर अलार्म नहीं बज रहा, तो फ़ोन की सेटिंग्स में जाकर पक्का करें कि इस ऐप के पास 'अलार्म और रिमाइंडर (Alarms & Reminders)' की अनुमति चालू है।",
+        "SOLARIS ALARM COMPASS" to "EARLY ROVER",
+        "Version 1.0.0 (Concept Edition)" to "वर्ज़न 1.0.0",
+        "Developed using modern Jetpack Compose, Room reactive databases, Alarm Clock APIs, and hardware-accelerated OpenGL ES 2.0 visualization." to "Early Rover (अर्ली रोवर) आपको समय पर जगाने और किसी भी सफर के दौरान सुरक्षित रखने में मदद करता है।"
     )
 
     // --- TRAVEL / DESTINATION ARRIVAL ALARM SYSTEMS (Declared early to avoid initialization NPE in init) ---
@@ -373,6 +375,17 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     val travelCurrentSpeed = TravelTrackingService.currentSpeedKmh
 
     init {
+        // Correct any Indian coordinate offsets or other fractional zones automatically to prevent discrepancies.
+        val savedLat = locationHelper.getSavedLatitude()
+        val savedLng = locationHelper.getSavedLongitude()
+        val originalTz = locationHelper.getSavedTimezoneOffset()
+        val savedName = locationHelper.getSavedLocationName()
+        val sanitizedTz = LocationHelper.sanitizeOffset(savedLat, savedLng, originalTz, savedName)
+        if (originalTz != sanitizedTz) {
+            _timezoneOffset.value = sanitizedTz
+            locationHelper.saveLocation(savedLat, savedLng, sanitizedTz, savedName)
+        }
+
         // Initialize saved location cities database FIRST so recomputeSunTimes can rely on exact city coordinates
         val savedStr = settingsPrefs.getString("saved_cities_list", "") ?: ""
         if (savedStr.isEmpty()) {
@@ -381,7 +394,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 "...",
                 locationHelper.getSavedLatitude(),
                 locationHelper.getSavedLongitude(),
-                locationHelper.getSavedTimezoneOffset()
+                _timezoneOffset.value
             )
             val initialList = listOf(defaultCity)
             _savedCities.value = initialList
@@ -398,13 +411,15 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                         // it to New York (would give wrong sun times/weather). Fields are sanitized of
                         // the '|'/';' delimiters at write time so coordinates land in the right token.
                         if (lat != null && lng != null) {
+                            val rawOffset = parts[4].toDoubleOrNull() ?: -5.0
+                            val offset = LocationHelper.sanitizeOffset(lat, lng, rawOffset, parts[1])
                             list.add(
                                 CityInfo(
                                     parts[0],
                                     parts[1],
                                     lat,
                                     lng,
-                                    parts[4].toDoubleOrNull() ?: -5.0
+                                    offset
                                 )
                             )
                         }
@@ -412,6 +427,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
             _savedCities.value = list
+            saveCitiesToPrefs(list) // Save back the corrected cities list
         }
 
         observeAlarmsForUpcoming()
@@ -489,6 +505,32 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 if (detailed != null) {
                     _detailedWeather.value = detailed
                     _weather.value = detailed.current
+                    
+                    val detectedTz = detailed.timezoneOffset ?: _timezoneOffset.value
+                    val activeName = _locationName.value
+                    val sanitizedTz = LocationHelper.sanitizeOffset(lat, lng, detectedTz, activeName)
+                    
+                    if (sanitizedTz != _timezoneOffset.value) {
+                        _timezoneOffset.value = sanitizedTz
+                        
+                        // We must save the dynamically refreshed DST offset to Room
+                        locationHelper.saveLocation(lat, lng, sanitizedTz, activeName)
+                        
+                        // Because tzOffset updated, we should recompute sun times inline to match the correct DST (preventing recursion)
+                        val offset = sanitizedTz
+                        val today = LocalDate.now(SunAlarmResolver.zoneOf(offset))
+                        val tomorrow = today.plusDays(1)
+                
+                        val todayTimes = SunCalculator.calculateSunTimes(lat, lng, today, offset)
+                        _sunriseTime.value = todayTimes.sunrise ?: LocalTime.of(6, 0)
+                        _sunsetTime.value = todayTimes.sunset ?: LocalTime.of(18, 0)
+                
+                        val tomorrowTimes = SunCalculator.calculateSunTimes(lat, lng, tomorrow, offset)
+                        _tomorrowSunriseTime.value = tomorrowTimes.sunrise ?: LocalTime.of(6, 0)
+                        _tomorrowSunsetTime.value = tomorrowTimes.sunset ?: LocalTime.of(18, 0)
+                
+                        recalculateAndScheduleActiveAlarms()
+                    }
                     primaryOk = true
                 } else {
                     val info = WeatherRepository.fetchCurrent(lat, lng)
@@ -606,16 +648,33 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun backfillUnboundAlarms() {
         val all = repository.allAlarms.first()
         val active = currentActiveLocation()
+        val activeLoc = SunAlarmResolver.Location(active.latitude, active.longitude, active.timezoneOffset, active.name)
+        
         for (alarm in all) {
+            var updated = alarm
+            var changed = false
             if (!alarm.hasLocation()) {
-                repository.updateAlarm(
-                    alarm.copy(
-                        locationName = active.name,
-                        latitude = active.latitude,
-                        longitude = active.longitude,
-                        timezoneOffset = active.timezoneOffset
-                    )
+                updated = updated.copy(
+                    locationName = active.name,
+                    latitude = active.latitude,
+                    longitude = active.longitude,
+                    timezoneOffset = active.timezoneOffset
                 )
+                // Recalibrate immediately with the newly bound location so digits are correct
+                updated = SunAlarmResolver.recalibrate(updated, activeLoc)
+                changed = true
+            }
+            // Auto-correct any Indian coordinate offsets or others from previous bad detections
+            val sanitized = LocationHelper.sanitizeOffset(updated.latitude, updated.longitude, updated.timezoneOffset, updated.locationName)
+            if (updated.timezoneOffset != sanitized) {
+                updated = updated.copy(timezoneOffset = sanitized)
+                // Re-recalibrate digits for the corrected offset
+                val boundLoc = SunAlarmResolver.Location(updated.latitude, updated.longitude, updated.timezoneOffset, updated.locationName)
+                updated = SunAlarmResolver.recalibrate(updated, boundLoc)
+                changed = true
+            }
+            if (changed) {
+                repository.updateAlarm(updated)
             }
         }
     }
@@ -683,6 +742,22 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             if (updated.active) {
                 scheduler.schedule(updated)
             }
+        }
+    }
+
+    fun calculateTimeUntilTrigger(alarm: Alarm): String? {
+        val nextTrigger = AlarmScheduler.getNextOccurrence(alarm).timeInMillis
+        val now = System.currentTimeMillis()
+        if (nextTrigger < now) return null
+        
+        val diff = nextTrigger - now
+        val hours = (diff / (1000 * 60 * 60)).toInt()
+        val minutes = ((diff / (1000 * 60)) % 60).toInt()
+        
+        return if (hours > 0) {
+            "${hours}h ${minutes}m"
+        } else {
+            "${minutes}m"
         }
     }
 
@@ -883,16 +958,19 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 // Bail if the user switched to a manual city while this detect was in flight, so a late
                 // callback can't clobber their selection (sun times / weather / active city).
                 if (!locationHelper.isAutoDetectEnabled()) return@requestCurrentLocation
+                
+                val sanitizedOffset = LocationHelper.sanitizeOffset(lat, lng, offset, name)
+                
                 _isDetectingLocation.value = false
                 _latitude.value = lat
                 _longitude.value = lng
-                _timezoneOffset.value = offset
+                _timezoneOffset.value = sanitizedOffset
                 _locationName.value = name
                 recomputeSunTimes() // recomputeSunTimes() already refreshes weather for the new coordinates
                 
                 // Add to saved cities
                 val current = _savedCities.value.toMutableList()
-                val newCity = CityInfo(name, "Detected", lat, lng, offset)
+                val newCity = CityInfo(name, "Detected", lat, lng, sanitizedOffset)
                 
                 // Only add if not already present (shared dedup rule with addSavedCity).
                 val existingIndex = current.indexOfFirst { it.sameCityAs(newCity) }

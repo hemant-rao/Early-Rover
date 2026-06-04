@@ -1,8 +1,11 @@
 package com.example.alarm.location
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import android.location.Location
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -82,6 +85,82 @@ class LocationHelper(private val context: Context) {
             CityInfo("Rio de Janeiro", "Brazil", -22.9068, -43.1729, -3.0),
             CityInfo("Cape Town", "South Africa", -33.9249, 18.4241, 2.0)
         )
+
+        fun estimateTimezoneOffsetOffline(lat: Double, lng: Double): Double {
+            // Check if the coordinate lies within India or Sri Lanka (UTC+5.5)
+            if (lat in 5.0..38.0 && lng in 67.0..99.0) {
+                return 5.5
+            }
+            // Check if the coordinate lies within Nepal (UTC+5.75)
+            if (lat in 26.0..31.0 && lng in 80.0..89.0) {
+                return 5.75
+            }
+            // Check if the coordinate lies within Myanmar (UTC+6.5)
+            if (lat in 9.0..29.0 && lng in 92.0..102.0) {
+                return 6.5
+            }
+            // Check if Afghanistan (UTC+4.5)
+            if (lat in 29.0..39.0 && lng in 60.0..75.0) {
+                return 4.5
+            }
+            // Check if Iran (UTC+3.5)
+            if (lat in 25.0..40.0 && lng in 44.0..64.0) {
+                return 3.5
+            }
+            // Check if Newfoundland (UTC-3.5)
+            if (lat in 46.0..61.0 && lng in -60.0..-52.0) {
+                return -3.5
+            }
+            // Check if South/Central Australia (Adelaide / Darwin -> UTC+9.5)
+            if (lat in -44.0..-10.0 && lng in 129.0..141.0) {
+                return 9.5
+            }
+            
+            // Otherwise, check if device timezone DST/non-DST standard offset is close to standard longitude estimate.
+            try {
+                val deviceTz = java.util.TimeZone.getDefault()
+                val deviceOffsetHours = deviceTz.getOffset(System.currentTimeMillis()) / (1000.0 * 60.0 * 60.0)
+                val crudeEstimate = Math.max(-12.0, Math.min(14.0, Math.round(lng / 15.0).toDouble()))
+                if (Math.abs(deviceOffsetHours - crudeEstimate) <= 1.5) {
+                    return deviceOffsetHours
+                }
+            } catch (e: Exception) {
+                // ignore
+            }
+
+            // Default crude estimate
+            return Math.max(-12.0, Math.min(14.0, Math.round(lng / 15.0).toDouble()))
+        }
+
+        /**
+         * Sanitizes a detected/parsed offset against coordinates and country information to prevent 
+         * common integer-rounding errors (e.g. India being detected as +5.0 instead of +5.5).
+         */
+        fun sanitizeOffset(lat: Double, lng: Double, detectedOffset: Double, country: String? = null): Double {
+            val c = country?.trim()?.uppercase() ?: ""
+            
+            // For India/Sri Lanka, if the offset is suspiciously +5.0 or +6.0, force +5.5.
+            val isIndiaOrSL = (lat in 5.0..38.0 && lng in 67.0..99.0) || 
+                              c.contains("INDIA") || c.contains(", IN") || c.endsWith(" IN") || c == "IN" ||
+                              c.contains("SRI LANKA") || c.contains(", LK") || c == "LK" || c.contains("COLOMBO")
+            if (isIndiaOrSL) {
+                if (Math.abs(detectedOffset - 5.5) <= 0.6) return 5.5
+            }
+            // Nepal (+5.75)
+            val isNepal = (lat in 26.0..31.0 && lng in 80.0..89.0) || 
+                          c.contains("NEPAL") || c.contains(", NP") || c == "NP" || c.contains("KATHMANDU")
+            if (isNepal) {
+                if (Math.abs(detectedOffset - 5.75) <= 0.3) return 5.75
+            }
+            // South/Central Australia (+9.5)
+            val isSCAust = (lat in -45.0..-10.0 && lng in 128.0..142.0) || 
+                           c.contains("ADELAIDE") || c.contains("DARWIN") || c.contains("SOUTH AUSTRALIA") || c.contains("NORTHERN TERRITORY")
+            if (isSCAust) {
+                // Only if the offset is already around +9 or +10
+                if (Math.abs(detectedOffset - 9.5) <= 0.6) return 9.5
+            }
+            return detectedOffset
+        }
     }
 
     fun getSavedLatitude(): Double = prefs.getFloat("lat", 40.7128f).toDouble() // Default NYC
@@ -102,6 +181,11 @@ class LocationHelper(private val context: Context) {
 
     fun setAutoDetect(enabled: Boolean) {
         prefs.edit().putBoolean("auto_detect", enabled).apply()
+    }
+
+    fun hasLocationPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+               ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
     }
 
     @SuppressLint("MissingPermission")
@@ -222,13 +306,9 @@ class LocationHelper(private val context: Context) {
                     // path (TimeZone.rawOffset) and SunCalculator/zoneOf's no-DST assumption.
                     val tzId = json.optString("timezone", "")
                     val timezoneOffset = if (tzId.isNotEmpty()) {
-                        try {
-                            java.util.TimeZone.getTimeZone(tzId).rawOffset / (1000.0 * 60.0 * 60.0)
-                        } catch (e: Exception) {
-                            Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
-                        }
+                        sanitizeOffset(lat, lng, parseTimezoneOffset(tzId) ?: estimateTimezoneOffsetOffline(lat, lng), country)
                     } else {
-                        Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
+                        estimateTimezoneOffsetOffline(lat, lng)
                     }
                     
                     val name = if (city.isNotEmpty() && country.isNotEmpty()) {
@@ -286,8 +366,7 @@ class LocationHelper(private val context: Context) {
                         // `timeZone` either as an IANA id or as an offset string like "+05:30".
                         val ianaId = json2.optJSONArray("timeZones")?.optString(0).orEmpty()
                             .ifEmpty { json2.optString("timeZone", "") }
-                        val timezoneOffset = parseTimezoneOffset(ianaId)
-                            ?: Math.round(lng / 15.0).toDouble().coerceIn(-12.0, 14.0)
+                        val timezoneOffset = sanitizeOffset(lat, lng, parseTimezoneOffset(ianaId) ?: estimateTimezoneOffsetOffline(lat, lng), country)
                         val name = if (city.isNotEmpty() && country.isNotEmpty()) {
                             "$city, $country"
                         } else if (city.isNotEmpty()) {
@@ -331,13 +410,13 @@ class LocationHelper(private val context: Context) {
         val lat = location.latitude
         val lng = location.longitude
 
-        // Simple timezone offset formula based on longitude (15 degrees = 1 hour)
-        val rawTzOffset = Math.round(lng / 15.0).toDouble()
-        val roundedTzOffset = Math.max(-12.0, Math.min(14.0, rawTzOffset))
+        // Use accurate timezone lookup via resolveTimezoneOffset, fall back to accurate offline estimator only if needed
+        var roundedTzOffset = resolveTimezoneOffset(lat, lng) ?: estimateTimezoneOffsetOffline(lat, lng)
         
         // Run blocking reverse geocoding on a background thread to prevent NetworkOnMainThreadException
         Thread {
             var detectedName = ""
+            var detectedCountry = ""
             try {
                 if (android.location.Geocoder.isPresent()) {
                     val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
@@ -346,9 +425,9 @@ class LocationHelper(private val context: Context) {
                     if (!addresses.isNullOrEmpty()) {
                         val address = addresses[0]
                         val city = address.locality ?: address.subAdminArea ?: address.adminArea ?: address.thoroughfare ?: ""
-                        val country = address.countryCode ?: address.countryName ?: ""
-                        detectedName = if (city.isNotEmpty() && country.isNotEmpty()) {
-                            "$city, $country"
+                        detectedCountry = address.countryCode ?: address.countryName ?: ""
+                        detectedName = if (city.isNotEmpty() && detectedCountry.isNotEmpty()) {
+                            "$city, $detectedCountry"
                         } else if (city.isNotEmpty()) {
                             city
                         } else if (address.countryName != null) {
@@ -391,16 +470,16 @@ class LocationHelper(private val context: Context) {
                                 .ifEmpty { addrObj.optString("suburb", "") }
                                 .ifEmpty { addrObj.optString("hamlet", "") }
                                 .ifEmpty { addrObj.optString("county", "") }
-                            val country = addrObj.optString("country_code", "").uppercase().ifEmpty {
+                            detectedCountry = addrObj.optString("country_code", "").uppercase().ifEmpty {
                                 addrObj.optString("country", "")
                             }
                             
-                            detectedName = if (city.isNotEmpty() && country.isNotEmpty()) {
-                                "$city, $country"
+                            detectedName = if (city.isNotEmpty() && detectedCountry.isNotEmpty()) {
+                                "$city, $detectedCountry"
                             } else if (city.isNotEmpty()) {
                                 city
                             } else {
-                                country
+                                detectedCountry
                             }
                         }
                     }
@@ -412,6 +491,9 @@ class LocationHelper(private val context: Context) {
             if (detectedName.isEmpty()) {
                 detectedName = String.format(java.util.Locale.US, "GPS: %.4f, %.4f", lat, lng)
             }
+            
+            // Re-sanitize against the detected country name or code
+            roundedTzOffset = sanitizeOffset(lat, lng, roundedTzOffset, detectedCountry.ifEmpty { detectedName })
             
             if (cancelled.get() || !isAutoDetectEnabled()) return@Thread
             saveLocation(lat, lng, roundedTzOffset, detectedName)
@@ -428,6 +510,10 @@ class LocationHelper(private val context: Context) {
         onSuccess: (lat: Double, lng: Double, timezoneOffset: Double, name: String) -> Unit,
         onFailure: (Exception) -> Unit
     ) {
+        if (!hasLocationPermission()) {
+            onFailure(SecurityException("Missing location permissions"))
+            return
+        }
         val fusedLocationClient = LocationServices.getFusedLocationProviderClient(context)
         cancelled.set(false)
         try {
@@ -503,9 +589,9 @@ class LocationHelper(private val context: Context) {
             // Looks like an IANA id (or bare UTC/GMT) -> use raw offset.
             return try {
                 val tz = java.util.TimeZone.getTimeZone(t)
-                // getTimeZone returns GMT for unknown ids; only trust a real match or UTC/GMT.
-                if (tz.id.equals(t, ignoreCase = true) || t.equals("UTC", ignoreCase = true) || t.equals("GMT", ignoreCase = true)) {
-                    tz.rawOffset / (1000.0 * 60.0 * 60.0)
+                // getTimeZone returns GMT for unknown ids; only trust a real match, alias, or UTC/GMT.
+                if (tz.id != "GMT" || t.equals("GMT", ignoreCase = true) || t.equals("UTC", ignoreCase = true)) {
+                    tz.getOffset(System.currentTimeMillis()) / (1000.0 * 60.0 * 60.0)
                 } else null
             } catch (e: Exception) {
                 null
@@ -589,16 +675,12 @@ class LocationHelper(private val context: Context) {
                         val longitude = cityJson.optDouble("longitude", 0.0)
                         val tzString = cityJson.optString("timezone", "")
                         
-                        val tzOffset = if (tzString.isNotEmpty()) {
-                            try {
-                                val tz = java.util.TimeZone.getTimeZone(tzString)
-                                tz.rawOffset / (1000.0 * 60.0 * 60.0)
-                            } catch (e: Exception) {
-                                Math.round(longitude / 15.0).toDouble()
-                            }
+                        var tzOffset = if (tzString.isNotEmpty()) {
+                            parseTimezoneOffset(tzString) ?: estimateTimezoneOffsetOffline(latitude, longitude)
                         } else {
-                            Math.round(longitude / 15.0).toDouble()
+                            estimateTimezoneOffsetOffline(latitude, longitude)
                         }
+                        tzOffset = sanitizeOffset(latitude, longitude, tzOffset, country)
                         
                         if (name.isNotEmpty()) {
                             cities.add(CityInfo(name, country, latitude, longitude, tzOffset))

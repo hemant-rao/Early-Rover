@@ -61,6 +61,7 @@ import com.example.alarm.ui.weather.WeatherBackground
 import com.example.alarm.weather.AirQualityInfo
 import com.example.alarm.viewmodel.AlarmViewModel
 import com.example.ui.theme.*
+import com.example.ui.AppLogo
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -108,6 +109,9 @@ fun DashboardScreen(
     var activeTab by rememberSaveable { mutableIntStateOf(0) }
     // Alarm whose OFF-toggle on a repeating alarm triggered the skip/turn-off dialog.
     var skipDialogAlarm by remember { mutableStateOf<Alarm?>(null) }
+    // Alarm whose deletion triggered confirmation dialog.
+    var deleteDialogAlarm by remember { mutableStateOf<Alarm?>(null) }
+    
     val isTravelTrackingActive by viewModel.isTravelTrackingActive.collectAsStateWithLifecycle()
 
     // Shared OFF-toggle handler: repeating alarms prompt skip-vs-turn-off; one-time alarms toggle directly.
@@ -291,11 +295,9 @@ fun DashboardScreen(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Home,
-                                contentDescription = "Dash",
-                                tint = if (activeTab == 0) SleekPrimary else SleekMutedText.copy(alpha = 0.7f),
-                                modifier = Modifier.size(22.dp)
+                            AppLogo(
+                                modifier = Modifier.size(24.dp),
+                                tint = if (activeTab == 0) SleekPrimary else SleekMutedText.copy(alpha = 0.7f)
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
@@ -424,14 +426,20 @@ fun DashboardScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(
-                                        text = "SOLAR ALARM",
-                                        style = MaterialTheme.typography.titleMedium.copy(
-                                            fontWeight = FontWeight.Black,
-                                            color = SleekPrimary,
-                                            letterSpacing = 1.2.sp
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        AppLogo(
+                                            modifier = Modifier.size(24.dp).padding(end = 6.dp),
+                                            tint = SleekPrimary
                                         )
-                                    )
+                                        Text(
+                                            text = "EARLY ROVER",
+                                            style = MaterialTheme.typography.titleMedium.copy(
+                                                fontWeight = FontWeight.Black,
+                                                color = SleekPrimary,
+                                                letterSpacing = 1.2.sp
+                                            )
+                                        )
+                                    }
                                     // Compact temp + icon + local time widget (top-right, near the city).
                                     CompactWeatherTimeWidget(weather = weather, tzOffset = tzOffset)
                                 }
@@ -454,22 +462,7 @@ fun DashboardScreen(
 
                                 Spacer(modifier = Modifier.height(12.dp))
 
-                                // Core-concept hero: why the app exists.
-                                Column(modifier = Modifier.fillMaxWidth()) {
-                                    Text(
-                                        text = viewModel.translate("Wake with the Sun"),
-                                        fontSize = 20.sp,
-                                        fontWeight = FontWeight.Black,
-                                        color = SleekActiveText
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = viewModel.translate("Alarms synced to sunrise & sunset at your exact location."),
-                                        fontSize = 12.sp,
-                                        color = SleekMutedText,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
+
                             }
                         }
 
@@ -516,11 +509,20 @@ fun DashboardScreen(
                                 ) {
                                     val sunriseAlarm = alarms.find { it.alarmType == "SUNRISE" }
                                     val sunsetAlarm = alarms.find { it.alarmType == "SUNSET" }
+                                    val today = java.time.LocalDate.now()
+                                    val sunriseTimeLocalized = com.example.alarm.data.SunAlarmResolver.fireTimeOn(
+                                        sunriseAlarm ?: com.example.alarm.data.Alarm(title = "Sunrise", alarmType = "SUNRISE", hour = 6, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName),
+                                        today
+                                    )
+                                    val sunsetTimeLocalized = com.example.alarm.data.SunAlarmResolver.fireTimeOn(
+                                        sunsetAlarm ?: com.example.alarm.data.Alarm(title = "Sunset", alarmType = "SUNSET", hour = 18, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName),
+                                        today
+                                    )
 
                                     SunriseSunsetAlarmCard(
                                         modifier = Modifier.weight(1f),
                                         title = viewModel.translate("Sunrise"),
-                                        time = String.format("%02d:%02d %s", if (sunrise.hour % 12 == 0) 12 else sunrise.hour % 12, sunrise.minute, if (sunrise.hour >= 12) "PM" else "AM"),
+                                        time = String.format("%02d:%02d %s", if (sunriseTimeLocalized.hour % 12 == 0) 12 else sunriseTimeLocalized.hour % 12, sunriseTimeLocalized.minute, if (sunriseTimeLocalized.hour >= 12) "PM" else "AM"),
                                         icon = Icons.Default.WbSunny,
                                         tint = SleekSolarAccent,
                                         isActive = sunriseAlarm?.active ?: false,
@@ -546,7 +548,7 @@ fun DashboardScreen(
                                     SunriseSunsetAlarmCard(
                                         modifier = Modifier.weight(1f),
                                         title = viewModel.translate("Sunset"),
-                                        time = String.format("%02d:%02d %s", if (sunset.hour % 12 == 0) 12 else sunset.hour % 12, sunset.minute, if (sunset.hour >= 12) "PM" else "AM"),
+                                        time = String.format("%02d:%02d %s", if (sunsetTimeLocalized.hour % 12 == 0) 12 else sunsetTimeLocalized.hour % 12, sunsetTimeLocalized.minute, if (sunsetTimeLocalized.hour >= 12) "PM" else "AM"),
                                         icon = Icons.Default.WbTwilight,
                                         tint = SleekSecondary,
                                         isActive = sunsetAlarm?.active ?: false,
@@ -766,7 +768,8 @@ fun DashboardScreen(
                                         alarm = alarm,
                                         onRowClick = { onNavigateToEditAlarm(alarm.id) },
                                         onToggleActive = { onAlarmToggle(alarm) },
-                                        onDeleteClick = { viewModel.deleteAlarm(alarm) },
+                                        onDeleteClick = { deleteDialogAlarm = alarm },
+                                        remainingTime = viewModel.calculateTimeUntilTrigger(alarm),
                                         translate = { viewModel.translate(it) }
                                     )
                                 }
@@ -860,6 +863,28 @@ fun DashboardScreen(
         )
     }
 
+    // Delete confirmation dialog
+    deleteDialogAlarm?.let { alarm ->
+        AlertDialog(
+            onDismissRequest = { deleteDialogAlarm = null },
+            title = { Text(viewModel.translate("Delete Alarm")) },
+            text = { Text(viewModel.translate("Are you sure you want to delete this alarm?")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteAlarm(alarm)
+                    deleteDialogAlarm = null
+                }) {
+                    Text(viewModel.translate("Delete"), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteDialogAlarm = null }) {
+                    Text(viewModel.translate("Cancel"))
+                }
+            }
+        )
+    }
+
     if (showLocationSearchDialog) {
         LocationSearchDialog(
             initialQuery = "",
@@ -888,6 +913,7 @@ fun SleekAlarmItemRow(
     onRowClick: () -> Unit,
     onToggleActive: () -> Unit,
     onDeleteClick: () -> Unit,
+    remainingTime: String?,
     translate: (String) -> String = { it }
 ) {
     Card(
@@ -977,6 +1003,14 @@ fun SleekAlarmItemRow(
                         fontWeight = FontWeight.Bold,
                         color = if (alarm.active) SleekActiveText else SleekActiveText.copy(alpha = 0.4f)
                     )
+                    if (remainingTime != null && alarm.active) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "${translate("in")} $remainingTime",
+                            fontSize = 12.sp,
+                            color = SleekSolarAccent
+                        )
+                    }
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = ampm,
@@ -1091,11 +1125,14 @@ fun CompactWeatherTimeWidget(
 
     val localTime = remember(nowTick, tzOffset) {
         try {
-            val zoneOffset = java.time.ZoneOffset.ofTotalSeconds((tzOffset * 3600).toInt())
-            java.time.OffsetDateTime.ofInstant(java.time.Instant.now(), zoneOffset)
-                .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+            // Convert decimal hours (e.g. 5.5) to integer seconds (e.g. 19800) then to a ZoneOffset.
+            // ZoneOffset is a subclass of ZoneId and is the most reliable way to handle fractional hour zones (India +5.5, Nepal +5.75).
+            val offsetSeconds = Math.round(tzOffset * 3600.0).toInt().coerceIn(-18 * 3600, 18 * 3600)
+            val zone = java.time.ZoneOffset.ofTotalSeconds(offsetSeconds)
+            java.time.ZonedDateTime.now(zone)
+                .format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a", java.util.Locale.US))
         } catch (e: Exception) {
-            java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
+            java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("hh:mm a", java.util.Locale.US))
         }
     }
 

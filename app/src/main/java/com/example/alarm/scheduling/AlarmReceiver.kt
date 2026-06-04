@@ -23,6 +23,14 @@ class AlarmReceiver : BroadcastReceiver() {
         // (no Snooze when disabled) without waiting for the post-hoc DB lookup to re-post it.
         val snoozeEnabled = intent.getBooleanExtra("ALARM_SNOOZE_ENABLED", true)
 
+        if (intent.getBooleanExtra("IS_PRE_NOTIFICATION", false)) {
+            val alarmTimeMs = intent.getLongExtra("ALARM_TIME_MS", 0L)
+            if (alarmTimeMs > 0) {
+                showPreNotification(context, alarmId, alarmTitle, alarmTimeMs)
+            }
+            return
+        }
+
         Log.d("AlarmReceiver", "Alarm fired! Id: $alarmId, Title: $alarmTitle, Type: $alarmType")
 
         // 1. Kick off the foreground media playing service
@@ -90,5 +98,34 @@ class AlarmReceiver : BroadcastReceiver() {
                 Log.e("AlarmReceiver", "Could not start main active full screen companion", e)
             }
         }
+    }
+
+    private fun showPreNotification(context: Context, alarmId: Int, alarmTitle: String, alarmTimeMs: Long) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val timeString = try {
+            val format = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault())
+            format.format(java.util.Date(alarmTimeMs))
+        } catch (e: Exception) { "" }
+        
+        val content = if (timeString.isNotEmpty()) "Upcoming alarm at $timeString" else "Upcoming alarm"
+        
+        val pendingIntent = android.app.PendingIntent.getActivity(
+            context,
+            alarmId,
+            Intent(context, Class.forName("com.example.MainActivity")).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            },
+            android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+        )
+        
+        val builder = androidx.core.app.NotificationCompat.Builder(context, "alarm_channel")
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setContentTitle("Upcoming: $alarmTitle")
+            .setContentText(content)
+            .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW) // Silent notification
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+
+        nm.notify("pre_alarm", alarmId, builder.build())
     }
 }

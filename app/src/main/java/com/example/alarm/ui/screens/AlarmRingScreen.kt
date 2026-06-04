@@ -125,7 +125,7 @@ fun AlarmRingScreen(
 
             // 2. ALARM TITLE INFO
             Text(
-                text = if (type == "TRAVEL") translate("SECURE ARRIVAL SENTRY DETECTED") else translate("SOLARIS ALERT TRIGGERED"),
+                text = if (type == "TRAVEL") translate("Destination Reached") else translate("Alarm Triggered"),
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Black,
                 color = primaryGlow,
@@ -135,7 +135,7 @@ fun AlarmRingScreen(
             Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = title.ifEmpty { translate("Dynamic Daylight Call") },
+                text = title.ifEmpty { translate("Wake Up Call") },
                 fontSize = 32.sp,
                 fontWeight = FontWeight.Bold,
                 color = Color.White,

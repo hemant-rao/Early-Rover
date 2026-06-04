@@ -212,7 +212,7 @@ fun TravelAlarmScreen(
             item {
                 Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     Text(
-                        text = t("ROUTE SENTRY", "मार्ग सुरक्षा"),
+                        text = t("LOCATION ALERTS", "लोकेशन अलर्ट्स"),
                         style = MaterialTheme.typography.titleMedium.copy(
                             fontWeight = FontWeight.Black,
                             color = SleekPrimary,
@@ -544,7 +544,7 @@ fun TravelAlarmScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = if (isTracking) t("STOP ARRIVAL SENTRY", "सुरक्षा ट्रैकिंग बंद करें") else t("START SEAMLESS SENTRY", "मार्ग सुरक्षा चालू करें"),
+                                text = if (isTracking) t("STOP TRACKING", "ट्रैकिंग बंद करें") else t("START TRACKING", "ट्रैकिंग शुरू करें"),
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.ExtraBold
                             )
@@ -561,7 +561,7 @@ fun TravelAlarmScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = t("PRESETS & TRANSIT ALARMS", "निर्धारित सफ़र अलार्म्स"),
+                        text = t("SAVED DESTINATIONS", "सेव की गई जगहें"),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Black,
                         color = SleekSecondary,

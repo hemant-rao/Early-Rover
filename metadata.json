@@ -1,6 +1,6 @@
 {
-  "name": "Solar Alarm",
-  "description": "An interactive offline astronomical sun-tracking alarm clock & live weather station.",
+  "name": "Early Rover",
+  "description": "Never Miss the Moment.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

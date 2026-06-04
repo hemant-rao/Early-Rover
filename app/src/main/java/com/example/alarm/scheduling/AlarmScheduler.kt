@@ -55,6 +55,25 @@ class AlarmScheduler(private val context: Context) {
         
         schedulePendingIntent(targetCal.timeInMillis, pendingIntentOffset, alarm.id)
         
+        // Schedule pre-alarm notification 1 hour earlier
+        val preAlarmTime = targetCal.timeInMillis - (60 * 60 * 1000)
+        if (preAlarmTime > System.currentTimeMillis()) {
+            val intentPre = Intent(context, AlarmReceiver::class.java).apply {
+                putExtra("IS_PRE_NOTIFICATION", true)
+                putExtra("ALARM_TITLE", alarm.title)
+                putExtra("ALARM_TIME_MS", targetCal.timeInMillis)
+            }
+            val preReqId = alarm.id + 100000
+            val pendingIntentPre = PendingIntent.getBroadcast(
+                context,
+                preReqId,
+                intentPre,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            // Schedule using inexact standard alarm manager to save battery, as precise timing off by a min or two is fine
+            scheduleInexact(preAlarmTime, pendingIntentPre)
+        }
+        
         // Also schedule exact time if requested and offset is present
         if (alarm.ringAtExactAlso && alarm.offsetMinutes != 0 && (alarm.alarmType == "SUNRISE" || alarm.alarmType == "SUNSET")) {
             // Compute the exact companion's OWN next strictly-future occurrence rather than
@@ -180,6 +199,18 @@ class AlarmScheduler(private val context: Context) {
         if (pendingIntentExact != null) {
             alarmManager.cancel(pendingIntentExact)
             pendingIntentExact.cancel()
+        }
+        
+        val intentPre = Intent(context, AlarmReceiver::class.java)
+        val pendingIntentPre = PendingIntent.getBroadcast(
+            context,
+            alarm.id + 100000,
+            intentPre,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        )
+        if (pendingIntentPre != null) {
+            alarmManager.cancel(pendingIntentPre)
+            pendingIntentPre.cancel()
         }
     }
 

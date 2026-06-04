@@ -35,6 +35,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import com.example.alarm.data.Alarm
 import com.example.alarm.viewmodel.AlarmViewModel
 import com.example.ui.theme.*
+import com.example.ui.AppLogo
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,6 +101,7 @@ fun AddEditAlarmScreen(
                     }
                 },
                 actions = {
+                    AppLogo(modifier = Modifier.size(24.dp).padding(end = if (alarmId != null) 16.dp else 8.dp))
                     if (alarmId != null) {
                         IconButton(
                             onClick = {
@@ -146,7 +148,7 @@ fun AddEditAlarmScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val (icon, tint, label, desc) = when (alarm.alarmType) {
-                        "SUNRISE" -> Quad(Icons.Default.WbSunny, SleekSolarAccent, viewModel.translate("Sunrise Alarm"), viewModel.translate("Fires relative to today's local sunrise."))
+                        "SUNRISE" -> Quad(Icons.Default.WbSunny, SleekSolarAccent, viewModel.translate("Wake with the Sun"), viewModel.translate("Fires relative to today's local sunrise."))
                         "SUNSET" -> Quad(Icons.Default.WbTwilight, SleekSecondary, viewModel.translate("Sunset Alarm"), viewModel.translate("Fires relative to today's local sunset."))
                         else -> Quad(Icons.Default.AccessTime, SleekPrimary, viewModel.translate("Standard Clock Alarm"), viewModel.translate("Fires at an exact manually set clock time."))
                     }
@@ -389,11 +391,12 @@ fun AddEditAlarmScreen(
                                 // ring time. nextTriggerInstant consumes alarm.offsetMinutes, so the
                                 // preview stays reactive to offset-chip changes on the live copy.
                                 try {
+                                    val zoneId = com.example.alarm.data.SunAlarmResolver.zoneOf(alarm.timezoneOffset)
                                     com.example.alarm.data.SunAlarmResolver.nextTriggerInstant(
                                         alarm,
                                         java.time.Instant.now(),
-                                        java.time.ZoneId.systemDefault()
-                                    ).atZone(java.time.ZoneId.systemDefault()).toLocalTime()
+                                        zoneId
+                                    ).atZone(zoneId).toLocalTime()
                                 } catch (e: Exception) {
                                     com.example.alarm.data.SunAlarmResolver.targetTime(
                                         alarm.alarmType,
@@ -818,9 +821,15 @@ fun AddEditAlarmScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            val context = androidx.compose.ui.platform.LocalContext.current
+            
             // 6. SAVE ACTION BUTTON WITH PREMIUM HORIZONTAL GRADIENT
             Button(
                 onClick = {
+                    val timeUntilTrigger = viewModel.calculateTimeUntilTrigger(alarm)
+                    if (timeUntilTrigger != null) {
+                        android.widget.Toast.makeText(context, "${viewModel.translate("Alarm will ring in")} $timeUntilTrigger", android.widget.Toast.LENGTH_LONG).show()
+                    }
                     viewModel.saveEditingAlarm()
                     onNavigateBack()
                 },

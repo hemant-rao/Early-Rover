@@ -34,32 +34,13 @@ object SunCalculator {
         val leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 
         // Equation of time and declination of Sun (NOAA simple formula)
-        // Gamma in radians (use the actual length of the year so leap years don't bias the angle).
-        // The NOAA method nominally evaluates EoT/declination at the location's solar transit, not at
-        // 00:00 UTC. For longitudes far from the prime meridian (worst near the date line) anchoring at
-        // UTC midnight leaves the ephemeris up to ~half a day stale, biasing sunrise/sunset by ~1 minute.
-        // To remove that bias we estimate the solar noon longitude-aware, recompute gamma once at that
-        // transit, and use the refined EoT/declination below.
+        // Gamma in radians (use the actual length of the year so leap years don't bias the angle)
         val daysInYear = if (leap) 366.0 else 365.0
-
-        fun gammaFor(fracDay: Double) = 2.0 * Math.PI / daysInYear * (dy - 1.0 + fracDay)
-
-        fun eqTimeFor(g: Double) =
-            229.18 * (0.000075 + 0.001868 * cos(g) - 0.032077 * sin(g) - 0.014615 * cos(2.0 * g) - 0.040849 * sin(2.0 * g))
-
-        // First pass: anchor at noon UTC (fracDay == 0, matching the existing 00:00-UTC reference).
-        val eqTimeFirst = eqTimeFor(gammaFor(0.0))
-
-        // Estimate solar noon in UTC minutes, then map it to a fractional-day offset where noon UTC -> 0.
-        val noonUtcMin = 720.0 - 4.0 * longitude - eqTimeFirst
-        val fracDay = noonUtcMin / 1440.0 - 0.5
-
-        // Second pass: gamma now tracks the location's actual solar transit.
-        val gamma = gammaFor(fracDay)
-
+        val gamma = 2.0 * Math.PI / daysInYear * (dy - 1.0 + (12.0 - 12.0) / 24.0)
+        
         // Equation of time in minutes
-        val eqTime = eqTimeFor(gamma)
-
+        val eqTime = 229.18 * (0.000075 + 0.001868 * cos(gamma) - 0.032077 * sin(gamma) - 0.014615 * cos(2.0 * gamma) - 0.040849 * sin(2.0 * gamma))
+        
         // Solar declination in radians
         val decl = 0.006918 - 0.399912 * cos(gamma) + 0.070257 * sin(gamma) - 0.006758 * cos(2.0 * gamma) + 0.000907 * sin(2.0 * gamma) - 0.002697 * cos(3.0 * gamma) + 0.00148 * sin(3.0 * gamma)
 

@@ -459,14 +459,14 @@ class AlarmService : Service() {
         // Bias request codes for the exact dual-ring companion so its PendingIntents don't collide with
         // the offset ring's, keeping the two notifications independently dismissable/snoozable.
         val rcBias = if (isExactAlso) 50000 else 0
-        val mainActivityClass = try {
-            Class.forName("com.example.MainActivity")
+        val alarmActivityClass = try {
+            Class.forName("com.example.alarm.ui.AlarmActivity")
         } catch (e: Exception) {
             null
         }
 
-        val fullScreenIntent = if (mainActivityClass != null) {
-            Intent(this, mainActivityClass).apply {
+        val fullScreenIntent = if (alarmActivityClass != null) {
+            Intent(this, alarmActivityClass).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                 putExtra("RINGING_ALARM_ID", alarmId)
                 putExtra("RINGING_ALARM_TITLE", title)

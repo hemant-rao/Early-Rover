@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.example.alarm.viewmodel.AlarmViewModel
 import com.example.alarm.viewmodel.ThemeMode
 import com.example.ui.theme.*
+import com.example.ui.AppLogo
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,6 +47,9 @@ fun SettingsScreen(
         topBar = {
             TopAppBar(
                 title = { Text(viewModel.translate("Settings"), fontWeight = FontWeight.Bold, color = SleekActiveText) },
+                actions = {
+                    AppLogo(modifier = Modifier.size(24.dp).padding(end = 8.dp))
+                },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack, modifier = Modifier.testTag("settings_back_button")) {
                         Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = viewModel.translate("Go back"), tint = SleekActiveText)
@@ -383,7 +387,7 @@ fun SettingsScreen(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = viewModel.translate("SOLARIS ALARM COMPASS"),
+                        text = viewModel.translate("EARLY ROVER"),
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                         color = SleekSolarAccent,

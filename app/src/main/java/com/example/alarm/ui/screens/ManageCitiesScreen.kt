@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.alarm.viewmodel.AlarmViewModel
 import com.example.ui.theme.*
+import com.example.ui.AppLogo
 import androidx.compose.ui.draw.clip
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -38,6 +39,9 @@ fun ManageCitiesScreen(
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
+                },
+                actions = {
+                    AppLogo(modifier = Modifier.size(24.dp).padding(end = 8.dp))
                 }
             )
         }
