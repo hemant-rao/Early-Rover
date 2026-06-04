@@ -66,15 +66,15 @@ fun SunriseSunsetAlarmCard(
             
             Row(
                 modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                listOf("-15m", "-30m", "-1h").forEach { label ->
-                    val offsetValue = when(label) {
-                        "-15m" -> -15
-                        "-30m" -> -30
-                        "-1h" -> -60
-                        else -> 0
-                    }
+                // Quick-pick offsets. These MUST be a subset of the editor's
+                // (AddEditAlarmScreen) offset list so a value chosen here is
+                // always reachable/round-trippable in the full editor.
+                // Editor list: listOf(-30, -15, -10, -5, 0, 5, 10, 15, 30)
+                val chips = listOf("0" to 0, "-15m" to -15, "-30m" to -30)
+                chips.forEach { (label, offsetValue) ->
                     val isSelected = currentOffset == offsetValue
                     TextButton(
                         onClick = { onOffsetSelected(offsetValue) },
@@ -82,12 +82,23 @@ fun SunriseSunsetAlarmCard(
                         modifier = Modifier.height(24.dp)
                     ) {
                         Text(
-                            text = label, 
-                            fontSize = 10.sp, 
+                            text = label,
+                            fontSize = 10.sp,
                             color = if (isSelected) SleekPrimary else SleekMutedText,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                         )
                     }
+                }
+                // If the alarm's offset isn't one of the quick-pick chips (e.g. it
+                // was set to -10/-5/+10 in the editor), surface a neutral "custom"
+                // indicator instead of silently leaving every chip unhighlighted.
+                if (chips.none { it.second == currentOffset }) {
+                    Text(
+                        text = "${currentOffset}m",
+                        fontSize = 10.sp,
+                        color = SleekPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
         }

@@ -95,7 +95,7 @@ fun DashboardScreen(
     val locationName by viewModel.locationName.collectAsStateWithLifecycle()
     val lat by viewModel.latitude.collectAsStateWithLifecycle()
     val lng by viewModel.longitude.collectAsStateWithLifecycle()
-    val darkTheme by viewModel.darkThemeEnabled.collectAsStateWithLifecycle()
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val weather by viewModel.weather.collectAsStateWithLifecycle()
     val airQuality by viewModel.airQuality.collectAsStateWithLifecycle()
     val savedCities by viewModel.savedCities.collectAsStateWithLifecycle()
@@ -133,14 +133,19 @@ fun DashboardScreen(
                 onDragEnd = {
                     val threshold = 120f
                     if (totalDragAmount < -threshold) {
-                        val nextIdx = (pagerState.currentPage + 1) % savedCities.size
-                        headerScope.launch {
-                            pagerState.animateScrollToPage(nextIdx)
+                        // Clamp (don't wrap) so body-swipe matches the pager's own clamping.
+                        val nextIdx = (pagerState.currentPage + 1).coerceAtMost(savedCities.lastIndex)
+                        if (nextIdx != pagerState.currentPage) {
+                            headerScope.launch {
+                                pagerState.animateScrollToPage(nextIdx)
+                            }
                         }
                     } else if (totalDragAmount > threshold) {
-                        val prevIdx = (pagerState.currentPage - 1 + savedCities.size) % savedCities.size
-                        headerScope.launch {
-                            pagerState.animateScrollToPage(prevIdx)
+                        val prevIdx = (pagerState.currentPage - 1).coerceAtLeast(0)
+                        if (prevIdx != pagerState.currentPage) {
+                            headerScope.launch {
+                                pagerState.animateScrollToPage(prevIdx)
+                            }
                         }
                     }
                 },
@@ -213,6 +218,13 @@ fun DashboardScreen(
                 java.time.LocalTime.now().hour in 6..17
             }
         }
+    }
+
+    // Drive the 3D scene from the SAME effective-theme source as the app chrome.
+    // Reading themeMode here makes this recompute when the user changes Light/Dark/Auto;
+    // AUTO additionally follows daylight at the active location.
+    val darkTheme = remember(themeMode, isDayAtLocation) {
+        viewModel.isEffectiveDark(isDayAtLocation)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -391,7 +403,10 @@ fun DashboardScreen(
             }
         }
     ) { innerPadding ->
-        Box(modifier = Modifier.fillMaxSize().then(swipeModifier).padding(bottom = innerPadding.calculateBottomPadding())) {
+        // Only let the body-swipe drive location switching on the Dash/Weather tabs;
+        // Settings and Travel have their own horizontal content and must not be hijacked.
+        val activeSwipeModifier = if (activeTab == 0 || activeTab == 1) swipeModifier else Modifier
+        Box(modifier = Modifier.fillMaxSize().then(activeSwipeModifier).padding(bottom = innerPadding.calculateBottomPadding())) {
             when (activeTab) {
                 0 -> { // DASH
                     LazyColumn(
@@ -1822,6 +1837,16 @@ private fun europeanAqiQuality(aqi: Int): Pair<String, Color> = when {
     else -> "Extremely Poor" to Color(0xFF991B1B)
 }
 
+/** Maps a US AQI value to a qualitative label + accent color using the EPA 0-500 scale. */
+private fun usAqiQuality(aqi: Int): Pair<String, Color> = when {
+    aqi <= 50 -> "Good" to Color(0xFF22C55E)
+    aqi <= 100 -> "Moderate" to Color(0xFFFBBF24)
+    aqi <= 150 -> "Unhealthy for Sensitive Groups" to Color(0xFFF97316)
+    aqi <= 200 -> "Unhealthy" to Color(0xFFEF4444)
+    aqi <= 300 -> "Very Unhealthy" to Color(0xFF8B5CF6)
+    else -> "Hazardous" to Color(0xFF7F1D1D)
+}
+
 @Composable
 fun AirQualityCard(
     aqi: AirQualityInfo,
@@ -1834,8 +1859,8 @@ fun AirQualityCard(
     val (qualityLabel, accent) = if (useEuropean) {
         europeanAqiQuality(aqi.europeanAqi)
     } else {
-        // US AQI has its own bands; surface a neutral accent with no European label.
-        "" to SleekSecondary
+        // US AQI uses the EPA 0-500 scale with its own bands.
+        usAqiQuality(aqi.usAqi)
     }
 
     Card(

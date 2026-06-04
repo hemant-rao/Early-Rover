@@ -22,6 +22,8 @@ import com.example.alarm.weather.WeatherRepository
 import com.example.alarm.weather.DetailedWeatherInfo
 import com.example.alarm.weather.AirQualityInfo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -75,9 +77,12 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         _longitude
     ) { alarms, name, lat, lng ->
         alarms.filter { a ->
-            a.locationName.isEmpty() ||
+            // Unbound legacy alarms are backfilled at init (see backfillUnboundAlarms), so we no
+            // longer show empty-location alarms in EVERY city. Match by bound name or proximity using
+            // the same epsilon as auto-detect dedup, so "same city" means one consistent thing.
+            !a.hasLocation() ||
                 a.locationName == name ||
-                (abs(a.latitude - lat) < 0.05 && abs(a.longitude - lng) < 0.05)
+                (abs(a.latitude - lat) < SAME_CITY_EPSILON && abs(a.longitude - lng) < SAME_CITY_EPSILON)
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -189,8 +194,10 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Sets the UI language. Persists via [LocaleHelper], then recreates the activity so
      * attachBaseContext re-reads the locale (LocalConfiguration updates). The ViewModel
-     * survives recreate(); the key(lang) wrapper in MainActivity is a safety net for
-     * the non-reactive translate() call sites.
+     * survives recreate(); translate() call sites are non-reactive but are refreshed because
+     * the entire activity is recreated on a language switch (manual recreate() below API 33;
+     * LocaleManager auto-recreate on 33+). currentLanguage is also a StateFlow read reactively
+     * inside translate(), so composables that read it recompose without a full recreate.
      */
     fun setAppLanguage(tag: String, activity: android.app.Activity? = null) {
         if (tag == currentLanguage.value) return
@@ -250,6 +257,11 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "Settings" to "सेटिंग्स",
         "Preferences & Appearance" to "प्राथमिकताएं और थीम",
         "Dark Mode" to "डार्क मोड",
+        "Light" to "लाइट",
+        "Dark" to "डार्क",
+        "Auto" to "ऑटो",
+        "Render dark celestial color profiles" to "गहरे खगोलीय रंग प्रोफ़ाइल दिखाएं",
+        "Applying language…" to "भाषा लागू की जा रही है…",
         "Default Snooze Duration" to "डिफ़ॉल्ट स्नूज़ समय",
         "Select Language" to "भाषा चुनें (Language)",
         "Only English & Hindi are fully translated; other languages change date/number format only." to "केवल अंग्रेज़ी और हिंदी का पूरा अनुवाद उपलब्ध है; अन्य भाषाएँ केवल तारीख/संख्या प्रारूप बदलती हैं।",
@@ -326,15 +338,22 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 if (item.isNotEmpty()) {
                     val parts = item.split("|")
                     if (parts.size >= 5) {
-                        list.add(
-                            CityInfo(
-                                parts[0],
-                                parts[1],
-                                parts[2].toDoubleOrNull() ?: 40.7128,
-                                parts[3].toDoubleOrNull() ?: -74.0060,
-                                parts[4].toDoubleOrNull() ?: -5.0
+                        val lat = parts[2].toDoubleOrNull()
+                        val lng = parts[3].toDoubleOrNull()
+                        // Drop a record whose coordinates can't be parsed instead of silently pinning
+                        // it to New York (would give wrong sun times/weather). Fields are sanitized of
+                        // the '|'/';' delimiters at write time so coordinates land in the right token.
+                        if (lat != null && lng != null) {
+                            list.add(
+                                CityInfo(
+                                    parts[0],
+                                    parts[1],
+                                    lat,
+                                    lng,
+                                    parts[4].toDoubleOrNull() ?: -5.0
+                                )
                             )
-                        )
+                        }
                     }
                 }
             }
@@ -343,6 +362,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
         recomputeSunTimes()
         observeAlarmsForUpcoming()
+        backfillUnboundAlarms()
 
         // Auto-stop travel tracking service if there are no travel alarms remaining
         viewModelScope.launch {
@@ -362,6 +382,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     private var lastWeatherFetchMs = 0L
     private var lastWeatherLat = Double.NaN
     private var lastWeatherLng = Double.NaN
+    private var weatherJob: Job? = null
 
     fun refreshWeather(force: Boolean = false) {
         val lat = _latitude.value
@@ -376,16 +397,26 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         _isWeatherLoading.value = true
-        viewModelScope.launch(Dispatchers.IO) {
+        // Cancel any in-flight fetch so a superseded (older-city) request can't write stale results.
+        weatherJob?.cancel()
+        weatherJob = viewModelScope.launch(Dispatchers.IO) {
             try {
+                var primaryOk = false
                 val detailed = WeatherRepository.fetchDetailed(lat, lng)
+                // Staleness guard: if the active city changed while the network call was in flight,
+                // drop these results so we don't overwrite current-city data or poison the throttle.
+                if (abs(_latitude.value - lat) > 0.05 || abs(_longitude.value - lng) > 0.05) {
+                    return@launch
+                }
                 if (detailed != null) {
                     _detailedWeather.value = detailed
                     _weather.value = detailed.current
+                    primaryOk = true
                 } else {
                     val info = WeatherRepository.fetchCurrent(lat, lng)
                     if (info != null) {
                         _weather.value = info
+                        primaryOk = true
                     }
                 }
                 // Air quality for the same coordinates (null-safe; leaves prior value on failure).
@@ -393,9 +424,13 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 if (aqi != null) {
                     _airQuality.value = aqi
                 }
-                lastWeatherFetchMs = now
-                lastWeatherLat = lat
-                lastWeatherLng = lng
+                // Only advance the throttle bookkeeping when a primary fetch actually succeeded; on a
+                // total failure leave it untouched so the next call can retry immediately.
+                if (primaryOk) {
+                    lastWeatherFetchMs = now
+                    lastWeatherLat = lat
+                    lastWeatherLng = lng
+                }
             } catch (e: Exception) {
                 Log.e("AlarmViewModel", "Weather refresh failed: ", e)
             } finally {
@@ -428,7 +463,11 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun observeAlarmsForUpcoming() {
         viewModelScope.launch {
-            allAlarms.collect { list ->
+            // Recompute on any DB change AND at least once a minute, so the hero "Next Alarm"
+            // self-heals after a repeating alarm re-arms (via the receiver, not the ViewModel)
+            // or after a midnight rollover even with the dashboard left open.
+            val ticker = flow { while (true) { emit(Unit); delay(60_000) } }
+            combine(allAlarms, ticker) { list, _ -> list }.collect { list ->
                 val activeList = list.filter { it.active }
                 if (activeList.isEmpty()) {
                     _nextUpcomingAlarm.value = null
@@ -471,6 +510,32 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * One-time backfill (run at init): assigns the currently active location to every alarm that has
+     * no recorded location (pre-binding legacy rows, or rows whose binding failed). Without this such
+     * alarms match the per-location filter in EVERY city and appear duplicated across all cities.
+     */
+    private fun backfillUnboundAlarms() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val all = repository.allAlarms.first()
+            val active = currentActiveLocation()
+            for (alarm in all) {
+                if (!alarm.hasLocation()) {
+                    repository.updateAlarm(
+                        alarm.copy(
+                            locationName = active.name,
+                            latitude = active.latitude,
+                            longitude = active.longitude,
+                            timezoneOffset = active.timezoneOffset
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private var recalcJob: Job? = null
+
+    /**
      * Recomputes the clock time of every active SUNRISE/SUNSET alarm and (re)schedules it.
      *
      * Each sun-alarm is resolved against ITS OWN stored coordinates — never the currently active
@@ -482,15 +547,28 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
      * once with the active location so they keep working after the upgrade.
      */
     fun recalculateAndScheduleActiveAlarms() {
-        viewModelScope.launch(Dispatchers.IO) {
+        // Cancel any prior pass so rapid city switches / a detect during a manual selection can't
+        // interleave concurrent DB + AlarmManager writes for the same alarm ids.
+        recalcJob?.cancel()
+        recalcJob = viewModelScope.launch(Dispatchers.IO) {
             val list = repository.getActiveAlarms()
             val activeLocation = currentActiveLocation()
             for (alarm in list) {
                 // No date passed: each sun-alarm calibrates against "today" in its OWN city's timezone.
                 val updatedAlarm = SunAlarmResolver.recalibrate(alarm, activeLocation)
-                // Persist only sun-alarms (recalibrate returns CUSTOM alarms unchanged).
-                if (updatedAlarm !== alarm) repository.updateAlarm(updatedAlarm)
-                scheduler.schedule(updatedAlarm)
+                // Only persist + reschedule when the fields that actually drive the fire time changed;
+                // recalibrate always returns a fresh copy (new updatedAt) so the !== check alone churns.
+                val changed = updatedAlarm.hour != alarm.hour ||
+                    updatedAlarm.minute != alarm.minute ||
+                    updatedAlarm.latitude != alarm.latitude ||
+                    updatedAlarm.longitude != alarm.longitude ||
+                    updatedAlarm.timezoneOffset != alarm.timezoneOffset
+                if (changed) {
+                    repository.updateAlarm(updatedAlarm)
+                    scheduler.schedule(updatedAlarm)
+                } else {
+                    scheduler.schedule(alarm)
+                }
             }
         }
     }
@@ -598,8 +676,10 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             // overwriting A's alarm.
             val recalced = SunAlarmResolver.recalibrate(alarm, currentActiveLocation())
             // CUSTOM alarms pass through recalibrate untouched, but the alarm list is filtered per
-            // active city — so still tag them with the active location's name to keep them visible.
-            val finalAlarm = if (recalced.alarmType == "CUSTOM") {
+            // active city — so tag a brand-new/unbound custom alarm with the active location to keep
+            // it visible. An already-bound custom alarm keeps its own city on edit (mirrors the sun
+            // path), so "set alarm for city A, switch to city B" no longer reassigns it to B.
+            val finalAlarm = if (recalced.alarmType == "CUSTOM" && !recalced.hasLocation()) {
                 recalced.copy(
                     locationName = _locationName.value,
                     latitude = _latitude.value,
@@ -662,7 +742,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 val newCity = CityInfo(name, "Detected", lat, lng, offset)
                 
                 // Only add if not already present
-                val existingIndex = current.indexOfFirst { it.name == name || (Math.abs(it.latitude - lat) < 0.01 && Math.abs(it.longitude - lng) < 0.01) }
+                val existingIndex = current.indexOfFirst { it.name == name || (abs(it.latitude - lat) < SAME_CITY_EPSILON && abs(it.longitude - lng) < SAME_CITY_EPSILON) }
                 if (existingIndex != -1) {
                     current[existingIndex] = newCity
                 } else {
@@ -687,33 +767,41 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopRingingAlarmAndDismiss() {
-        val ringingId = _ringingAlarm.value?.id ?: -1
+        val ringing = _ringingAlarm.value
+        val ringingId = ringing?.id ?: -1
         _ringingAlarm.value = null
-        
+
         val context = getApplication<Application>()
-        if (ringingId >= 500000) {
+        if (ringing?.type == "TRAVEL") {
             TravelTrackingService.stopService(context)
         } else {
             // Command service to halt playing
             val dismissIntent = Intent(context, AlarmService::class.java).apply {
                 action = "ACTION_DISMISS"
                 putExtra("ALARM_ID", ringingId)
+                putExtra("ALARM_TITLE", ringing?.title ?: "Alarm")
+                putExtra("ALARM_TYPE", ringing?.type ?: "CUSTOM")
             }
             context.startService(dismissIntent)
         }
     }
 
     fun stopRingingAlarmAndSnooze() {
-        val ringingId = _ringingAlarm.value?.id ?: -1
+        val ringing = _ringingAlarm.value
+        val ringingId = ringing?.id ?: -1
         _ringingAlarm.value = null
 
         val context = getApplication<Application>()
-        if (ringingId >= 500000) {
+        if (ringing?.type == "TRAVEL") {
             TravelTrackingService.stopService(context)
         } else {
             val snoozeIntent = Intent(context, AlarmService::class.java).apply {
                 action = "ACTION_SNOOZE"
                 putExtra("ALARM_ID", ringingId)
+                // Carry the real name & SUNRISE/SUNSET type so the snoozed re-fire isn't
+                // downgraded to the default "Alarm"/"CUSTOM" (matches the notification-button path).
+                putExtra("ALARM_TITLE", ringing?.title ?: "Alarm")
+                putExtra("ALARM_TYPE", ringing?.type ?: "CUSTOM")
             }
             context.startService(snoozeIntent)
         }
@@ -733,7 +821,12 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     // SAVED LOCATIONS STORAGE & MANAGEMENT
     private fun saveCitiesToPrefs(list: List<CityInfo>) {
-        val str = list.joinToString(";") { "${it.name}|${it.country}|${it.latitude}|${it.longitude}|${it.timezoneOffset}" }
+        // Sanitize the '|' (field) and ';' (record) delimiters out of free-form names/countries so a
+        // geocoded value like "Washington, D.C.; County" can't split or shift the record on read.
+        fun clean(s: String) = s.replace("|", " ").replace(";", " ")
+        val str = list.joinToString(";") {
+            "${clean(it.name)}|${clean(it.country)}|${it.latitude}|${it.longitude}|${it.timezoneOffset}"
+        }
         settingsPrefs.edit().putString("saved_cities_list", str).apply()
     }
 
@@ -748,19 +841,27 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteSavedCity(city: CityInfo) {
+        // Identify the active city by coordinates (display names like "Delhi, IN" / "GPS: .." / "Auto
+        // IP Location" rarely equal the stored CityInfo.name), falling back to name equality.
+        val wasActive =
+            (abs(city.latitude - _latitude.value) < SAME_CITY_EPSILON &&
+                abs(city.longitude - _longitude.value) < SAME_CITY_EPSILON) ||
+                locationName.value.lowercase() == city.name.lowercase()
+
         val current = _savedCities.value.toMutableList()
         // Remove only the first exact match
         current.remove(city)
-        
+
         // Ensure at least one city remains
         if (current.isEmpty()) {
             current.add(city)
         }
         _savedCities.value = current
         saveCitiesToPrefs(current)
-        
-        // If we deleted the active city, select another one
-        if (locationName.value.lowercase() == city.name.lowercase() && current.isNotEmpty()) {
+
+        // If we deleted the active city, reselect a remaining one so lat/lng/tz/loc_name stay
+        // consistent with the list (otherwise the app keeps pointing at the deleted city).
+        if (wasActive && current.isNotEmpty()) {
             setManualCitySelection(current[0])
         }
     }
@@ -801,5 +902,11 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     fun stopTravelTracking() {
         val context = getApplication<Application>()
         TravelTrackingService.stopService(context)
+    }
+
+    companion object {
+        // Single shared definition of "same city" used by both the per-location alarm filter and the
+        // auto-detect dedup, so list visibility and detection agree (~1.1 km at the equator).
+        const val SAME_CITY_EPSILON = 0.01
     }
 }
