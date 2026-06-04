@@ -24,6 +24,7 @@ import com.example.alarm.data.Alarm
 import com.example.alarm.data.AppDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -34,6 +35,8 @@ class AlarmService : Service() {
     private var mediaPlayer: MediaPlayer? = null
     private var vibrator: Vibrator? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var playbackJob: Job? = null
+    @Volatile private var stopRequested = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -53,10 +56,18 @@ class AlarmService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val alarmId = intent?.getIntExtra("ALARM_ID", -1) ?: -1
-        val alarmTitle = intent?.getStringExtra("ALARM_TITLE") ?: "Alarm"
-        val alarmType = intent?.getStringExtra("ALARM_TYPE") ?: "CUSTOM"
-        val action = intent?.action
+        // A null intent means the OS re-created the service after killing it (sticky restart). This is
+        // a transient, self-contained ring re-armed by AlarmManager, so never resurrect a phantom alarm.
+        if (intent == null) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+
+        val alarmId = intent.getIntExtra("ALARM_ID", -1)
+        val alarmTitle = intent.getStringExtra("ALARM_TITLE") ?: "Alarm"
+        val alarmType = intent.getStringExtra("ALARM_TYPE") ?: "CUSTOM"
+        val snoozeEnabled = intent.getBooleanExtra("ALARM_SNOOZE_ENABLED", true)
+        val action = intent.action
 
         if (action == "ACTION_DISMISS") {
             dismissAlarm(alarmId)
@@ -76,7 +87,7 @@ class AlarmService : Service() {
             ServiceCompat.startForeground(
                 this,
                 NOTIFICATION_ID,
-                buildForegroundNotification(alarmId, alarmTitle, alarmType),
+                buildForegroundNotification(alarmId, alarmTitle, alarmType, snoozeEnabled),
                 serviceType
             )
         } catch (e: Exception) {
@@ -84,29 +95,36 @@ class AlarmService : Service() {
             // the user still sees the alarm, then continue to play sound/vibrate below.
             Log.e("AlarmService", "startForeground failed, falling back to plain notification", e)
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                .notify(NOTIFICATION_ID, buildForegroundNotification(alarmId, alarmTitle, alarmType))
+                .notify(NOTIFICATION_ID, buildForegroundNotification(alarmId, alarmTitle, alarmType, snoozeEnabled))
         }
 
         if (alarmId != -1) {
-            serviceScope.launch {
+            playbackJob = serviceScope.launch {
                 try {
                     val db = AppDatabase.getDatabase(this@AlarmService)
                     val alarmObj = db.alarmDao().getAlarmById(alarmId)
-                    playAlarmSound(alarmObj?.ringtoneUri)
+                    playAlarmSound(alarmObj?.ringtoneUri, alarmObj?.volume ?: 80)
+                    // Honor the per-alarm vibration toggle; default true when the alarm is missing.
+                    if (alarmObj?.vibrationEnabled != false) startVibration()
                 } catch (e: Exception) {
                     Log.e("AlarmService", "DB lookup failed for custom ringtone, performing default playback", e)
                     playAlarmSound(null)
+                    startVibration()
                 }
             }
         } else {
             playAlarmSound(null)
+            startVibration()
         }
-        startVibration()
 
-        return START_STICKY
+        // Alarms are (re)armed by AlarmManager, not by service stickiness, so never restart sticky.
+        return START_NOT_STICKY
     }
 
-    private fun playAlarmSound(ringtoneUriString: String?) {
+    private fun playAlarmSound(ringtoneUriString: String?, volumePercent: Int = 80) {
+        // A dismiss/snooze may have arrived before this (async) coroutine resumed; never resurrect the ring.
+        if (stopRequested) return
+        val v = volumePercent.coerceIn(0, 100) / 100f
         try {
             var alarmUri: Uri? = null
             if (!ringtoneUriString.isNullOrEmpty()) {
@@ -131,7 +149,9 @@ class AlarmService : Service() {
                         .build()
                 )
                 isLooping = true
+                setVolume(v, v)
                 prepare()
+                if (stopRequested) { release(); return }
                 start()
             }
         } catch (e: Exception) {
@@ -148,7 +168,9 @@ class AlarmService : Service() {
                             .build()
                     )
                     isLooping = true
+                    setVolume(v, v)
                     prepare()
+                    if (stopRequested) { release(); return }
                     start()
                 }
             } catch (e2: Exception) {
@@ -157,6 +179,12 @@ class AlarmService : Service() {
                     val notifUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
                     mediaPlayer = MediaPlayer.create(this@AlarmService, notifUri)
                     mediaPlayer?.isLooping = true
+                    mediaPlayer?.setVolume(v, v)
+                    if (stopRequested) {
+                        mediaPlayer?.release()
+                        mediaPlayer = null
+                        return
+                    }
                     mediaPlayer?.start()
                 } catch (e3: Exception) {
                     Log.e("AlarmService", "Fallback notification sound failed, alarm muted!", e3)
@@ -180,9 +208,13 @@ class AlarmService : Service() {
     }
 
     private fun dismissAlarm(alarmId: Int) {
+        // Make dismiss authoritative over any in-flight playback coroutine so it can't resurrect the ring.
+        stopRequested = true
+        playbackJob?.cancel()
         // Silence the ring immediately, but defer stopSelf() until the DB/reschedule work is done so
         // we don't tear the service (and its scope) down before the coroutine runs.
         mediaPlayer?.stop()
+        try { vibrator?.cancel() } catch (e: Exception) { Log.e("AlarmService", "Failed to cancel vibration", e) }
         if (alarmId != -1) {
             serviceScope.launch {
                 try {
@@ -208,14 +240,23 @@ class AlarmService : Service() {
     }
 
     private fun snoozeAlarm(alarmId: Int, title: String, type: String) {
+        // Make snooze authoritative over any in-flight playback coroutine so it can't resurrect the ring.
+        stopRequested = true
+        playbackJob?.cancel()
         // Silence the ring immediately, but defer stopSelf() until the snooze is scheduled.
         mediaPlayer?.stop()
+        try { vibrator?.cancel() } catch (e: Exception) { Log.e("AlarmService", "Failed to cancel vibration", e) }
         if (alarmId != -1) {
             serviceScope.launch {
                 try {
                     val db = AppDatabase.getDatabase(this@AlarmService)
                     val dao = db.alarmDao()
                     val alarm = dao.getAlarmById(alarmId)
+                    // Defensively reject a snooze for an alarm that has snooze disabled (e.g. stale/forged intent).
+                    if (alarm != null && !alarm.snoozeEnabled) {
+                        Log.d("AlarmService", "Snooze ignored: alarm $alarmId has snooze disabled")
+                        return@launch
+                    }
                     val snoozeTimeMinutes = alarm?.snoozeMinutes ?: 5
 
                     // Create relative intent for snooze alarm triggers
@@ -250,7 +291,7 @@ class AlarmService : Service() {
         }
     }
 
-    private fun buildForegroundNotification(alarmId: Int, title: String, type: String): Notification {
+    private fun buildForegroundNotification(alarmId: Int, title: String, type: String, snoozeEnabled: Boolean = true): Notification {
         val mainActivityClass = try {
             Class.forName("com.example.MainActivity")
         } catch (e: Exception) {
@@ -279,14 +320,16 @@ class AlarmService : Service() {
         }
         val dismissPendingIntent = PendingIntent.getService(this, alarmId + 300, dismissIntent, pendingFlags)
 
-        val snoozeIntent = Intent(this, AlarmService::class.java).apply {
-            action = "ACTION_SNOOZE"
-            putExtra("ALARM_ID", alarmId)
-            // Carry title/type so a notification-button snooze keeps the real name & SUNRISE/SUNSET type.
-            putExtra("ALARM_TITLE", title)
-            putExtra("ALARM_TYPE", type)
-        }
-        val snoozePendingIntent = PendingIntent.getService(this, alarmId + 400, snoozeIntent, pendingFlags)
+        val snoozePendingIntent = if (snoozeEnabled) {
+            val snoozeIntent = Intent(this, AlarmService::class.java).apply {
+                action = "ACTION_SNOOZE"
+                putExtra("ALARM_ID", alarmId)
+                // Carry title/type so a notification-button snooze keeps the real name & SUNRISE/SUNSET type.
+                putExtra("ALARM_TITLE", title)
+                putExtra("ALARM_TYPE", type)
+            }
+            PendingIntent.getService(this, alarmId + 400, snoozeIntent, pendingFlags)
+        } else null
 
         val alarmDescription = when (type) {
             "SUNRISE" -> "Solar Sunrise Alert"
@@ -304,7 +347,10 @@ class AlarmService : Service() {
             .setAutoCancel(false)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Dismiss", dismissPendingIntent)
-            .addAction(android.R.drawable.ic_media_play, "Snooze", snoozePendingIntent)
+
+        if (snoozePendingIntent != null) {
+            builder.addAction(android.R.drawable.ic_media_play, "Snooze", snoozePendingIntent)
+        }
 
         if (fullScreenPendingIntent != null) {
             builder.setFullScreenIntent(fullScreenPendingIntent, true)

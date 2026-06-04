@@ -87,6 +87,15 @@ class AlarmScheduler(private val context: Context) {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             
+            // On API 31+ the SCHEDULE_EXACT_ALARM permission is user-revocable. If it is not
+            // granted, setAlarmClock()/setExact*() throw SecurityException, so skip straight to
+            // the inexact path that requires no permission.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !alarmManager.canScheduleExactAlarms()) {
+                Log.w("AlarmScheduler", "Exact alarm permission not granted; using inexact alarm for reqId: $reqId")
+                scheduleInexact(triggerTime, pendingIntent)
+                return
+            }
+
             val info = AlarmManager.AlarmClockInfo(triggerTime, showPendingIntent)
             try {
                 alarmManager.setAlarmClock(info, pendingIntent)
@@ -100,10 +109,25 @@ class AlarmScheduler(private val context: Context) {
     }
 
     private fun scheduleFallback(triggerTime: Long, pendingIntent: PendingIntent) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            } else {
+                alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            }
+        } catch (e: SecurityException) {
+            // Exact-alarm access revoked: degrade to an inexact alarm that needs no permission so
+            // schedule() never throws (which would crash the caller / abort batch rescheduling).
+            Log.w("AlarmScheduler", "Exact fallback denied; degrading to inexact alarm", e)
+            scheduleInexact(triggerTime, pendingIntent)
+        }
+    }
+
+    private fun scheduleInexact(triggerTime: Long, pendingIntent: PendingIntent) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
         } else {
-            alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
+            alarmManager.set(AlarmManager.RTC_WAKEUP, triggerTime, pendingIntent)
         }
     }
 

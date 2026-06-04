@@ -2,7 +2,10 @@ package com.example
 
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
 import android.os.Bundle
+import com.example.alarm.scheduling.RescheduleReceiver
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -46,9 +49,25 @@ class MainActivity : ComponentActivity() {
         super.attachBaseContext(LocaleHelper.wrap(newBase))
     }
 
+    // ACTION_TIME_CHANGED / ACTION_TIMEZONE_CHANGED are only delivered to dynamically
+    // registered receivers (not manifest-declared ones), so we register RescheduleReceiver
+    // here to recalibrate sun alarms when the user changes the clock or flies to a new zone.
+    private val timeChangeReceiver = RescheduleReceiver()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        val timeFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(timeChangeReceiver, timeFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(timeChangeReceiver, timeFilter)
+        }
         
         setContent {
             val viewModel: AlarmViewModel = viewModel()
@@ -64,10 +83,18 @@ class MainActivity : ComponentActivity() {
             val weather by viewModel.weather.collectAsState()
             val sunriseTime by viewModel.sunriseTime.collectAsState()
             val sunsetTime by viewModel.sunsetTime.collectAsState()
+            val tzOffset by viewModel.timezoneOffset.collectAsState()
             // Prefer the live weather day/night signal; fall back to current-hour vs sunrise/sunset.
+            // Evaluate "now" in the ACTIVE LOCATION's timezone (matching sunrise/sunset), not the device's.
             val isDayAtLocation = weather?.isDay ?: run {
-                val now = java.time.LocalTime.now()
-                !now.isBefore(sunriseTime) && now.isBefore(sunsetTime)
+                try {
+                    val zone = java.time.ZoneOffset.ofTotalSeconds((tzOffset * 3600).toInt())
+                    val now = java.time.OffsetDateTime.ofInstant(java.time.Instant.now(), zone).toLocalTime()
+                    if (sunsetTime <= sunriseTime) now.hour in 6..17 // polar/wrap fallback by hour
+                    else !now.isBefore(sunriseTime) && now.isBefore(sunsetTime)
+                } catch (e: Exception) {
+                    java.time.LocalTime.now().hour in 6..17
+                }
             }
             val darkTheme = viewModel.isEffectiveDark(isDayAtLocation)
             val switching by viewModel.isSwitchingLanguage.collectAsState()
@@ -119,14 +146,14 @@ class MainActivity : ComponentActivity() {
                         title = ringingState!!.title,
                         type = ringingState!!.type,
                         onDismiss = {
-                            val isTravel = ringingState!!.type == "TRAVEL" || (ringingState!!.id >= 500000)
+                            val isTravel = ringingState!!.type == "TRAVEL"
                             viewModel.stopRingingAlarmAndDismiss()
                             if (isTravel) {
                                 pendingNavDestination.value = "travel"
                             }
                         },
                         onSnooze = {
-                            val isTravel = ringingState!!.type == "TRAVEL" || (ringingState!!.id >= 500000)
+                            val isTravel = ringingState!!.type == "TRAVEL"
                             viewModel.stopRingingAlarmAndSnooze()
                             if (isTravel) {
                                 pendingNavDestination.value = "travel"
@@ -237,7 +264,7 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 CircularProgressIndicator()
                                 Text(
-                                    text = "Applying language…",
+                                    text = viewModel.translate("Applying language…"),
                                     color = Color.White,
                                     modifier = Modifier.padding(top = 16.dp)
                                 )
@@ -255,6 +282,15 @@ class MainActivity : ComponentActivity() {
         if (::model.isInitialized) {
             checkIncomingAlarmIntent(intent)
         }
+    }
+
+    override fun onDestroy() {
+        try {
+            unregisterReceiver(timeChangeReceiver)
+        } catch (e: Exception) {
+            // Receiver may already be unregistered; ignore.
+        }
+        super.onDestroy()
     }
 
     private fun checkIncomingAlarmIntent(intent: Intent?) {

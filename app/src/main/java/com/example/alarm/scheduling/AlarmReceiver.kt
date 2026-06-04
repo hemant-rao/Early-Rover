@@ -49,18 +49,25 @@ class AlarmReceiver : BroadcastReceiver() {
             }
         }
 
-        // 2. Launch MainActivity as full-screen companion
-        try {
-            val mainActivityClass = Class.forName("com.example.MainActivity")
-            val activityIntent = Intent(context, mainActivityClass).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-                putExtra("RINGING_ALARM_ID", alarmId)
-                putExtra("RINGING_ALARM_TITLE", alarmTitle)
-                putExtra("RINGING_ALARM_TYPE", alarmType)
+        // 2. Launch MainActivity as full-screen companion.
+        // On Android 10+ (Q) Background Activity Start restrictions block raw startActivity from a
+        // broadcast, and the AlarmService notification's IMPORTANCE_HIGH setFullScreenIntent already
+        // delivers the full-screen ring UI reliably and within BAL rules. Doing a second
+        // NEW_TASK+CLEAR_TASK launch here would only compete with that path and can flicker/duplicate
+        // the ring screen, so this direct launch is gated to pre-Q devices as a best-effort fallback.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            try {
+                val mainActivityClass = Class.forName("com.example.MainActivity")
+                val activityIntent = Intent(context, mainActivityClass).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    putExtra("RINGING_ALARM_ID", alarmId)
+                    putExtra("RINGING_ALARM_TITLE", alarmTitle)
+                    putExtra("RINGING_ALARM_TYPE", alarmType)
+                }
+                context.startActivity(activityIntent)
+            } catch (e: Exception) {
+                Log.e("AlarmReceiver", "Could not start main active full screen companion", e)
             }
-            context.startActivity(activityIntent)
-        } catch (e: Exception) {
-            Log.e("AlarmReceiver", "Could not start main active full screen companion", e)
         }
     }
 }
