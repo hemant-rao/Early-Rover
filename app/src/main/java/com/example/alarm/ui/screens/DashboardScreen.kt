@@ -511,11 +511,11 @@ fun DashboardScreen(
                                     val sunsetAlarm = alarms.find { it.alarmType == "SUNSET" }
                                     val today = java.time.LocalDate.now()
                                     val sunriseTimeLocalized = com.example.alarm.data.SunAlarmResolver.fireTimeOn(
-                                        sunriseAlarm ?: com.example.alarm.data.Alarm(title = "Sunrise", alarmType = "SUNRISE", hour = 6, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName),
+                                        (sunriseAlarm ?: com.example.alarm.data.Alarm(title = "Sunrise", alarmType = "SUNRISE", hour = 6, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName)).withHealedTimezoneOffset(),
                                         today
                                     )
                                     val sunsetTimeLocalized = com.example.alarm.data.SunAlarmResolver.fireTimeOn(
-                                        sunsetAlarm ?: com.example.alarm.data.Alarm(title = "Sunset", alarmType = "SUNSET", hour = 18, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName),
+                                        (sunsetAlarm ?: com.example.alarm.data.Alarm(title = "Sunset", alarmType = "SUNSET", hour = 18, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName)).withHealedTimezoneOffset(),
                                         today
                                     )
 
@@ -907,6 +907,20 @@ fun DashboardScreen(
     }
 }
 
+/**
+ * Returns a copy of this alarm with its stored timezone offset re-sanitised against its OWN
+ * coordinates (e.g. a rounded India +5.0 corrected to +5.5). Used by the dashboard sun cards so the
+ * displayed sunrise/sunset is correct SYNCHRONOUSLY at render time, with no 30-minutes-early flash
+ * before the ViewModel's background DB heal lands. Only the offset is touched; every other field
+ * (id, active, offsetMinutes, …) is preserved. Unbound alarms (no coordinates) are returned as-is.
+ */
+private fun Alarm.withHealedTimezoneOffset(): Alarm =
+    if (hasLocation()) copy(
+        timezoneOffset = com.example.alarm.location.LocationHelper.sanitizeOffset(
+            latitude, longitude, timezoneOffset, locationName
+        )
+    ) else this
+
 @Composable
 fun SleekAlarmItemRow(
     alarm: Alarm,
@@ -1003,14 +1017,6 @@ fun SleekAlarmItemRow(
                         fontWeight = FontWeight.Bold,
                         color = if (alarm.active) SleekActiveText else SleekActiveText.copy(alpha = 0.4f)
                     )
-                    if (remainingTime != null && alarm.active) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "${translate("in")} $remainingTime",
-                            fontSize = 12.sp,
-                            color = SleekSolarAccent
-                        )
-                    }
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = ampm,
@@ -1019,6 +1025,14 @@ fun SleekAlarmItemRow(
                         color = if (alarm.active) SleekActiveText else SleekActiveText.copy(alpha = 0.4f),
                         modifier = Modifier.padding(bottom = 2.dp)
                     )
+                    if (remainingTime != null && alarm.active) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "${translate("in")} $remainingTime",
+                            fontSize = 12.sp,
+                            color = SleekSolarAccent
+                        )
+                    }
                 }
 
                 val titleDefault = if (alarm.title.isNotEmpty()) alarm.title else when (alarm.alarmType) {

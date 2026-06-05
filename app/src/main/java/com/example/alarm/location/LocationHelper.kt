@@ -138,25 +138,58 @@ class LocationHelper(private val context: Context) {
          */
         fun sanitizeOffset(lat: Double, lng: Double, detectedOffset: Double, country: String? = null): Double {
             val c = country?.trim()?.uppercase() ?: ""
-            
+
+            // --- Most specific first: country/city-string-confirmed fractional zones. ---
+            // These are matched on the NAME only (never raw coordinates), because each one's geographic
+            // box overlaps a neighbour on a DIFFERENT offset — Nepal sits inside India's box (and over
+            // real Indian territory like Lucknow); Myanmar/Thailand, Afghanistan/Pakistan, Iran/Iraq and
+            // Newfoundland/Atlantic-Canada likewise straddle a boundary. Trusting a confirmed country name
+            // is the one reliable signal that can't clobber a correctly-detected neighbour. Checked BEFORE
+            // the India coordinate snap below so e.g. "Kathmandu, NP" resolves to +5:45, not India's +5:30.
+            // Nepal (+5.75)
+            if (c.contains("NEPAL") || c.contains(", NP") || c == "NP" || c.contains("KATHMANDU")) return 5.75
+            // Myanmar (+6.5)
+            if (c.contains("MYANMAR") || c.contains("BURMA") || c == "MM" || c.contains(", MM") || c.contains("YANGON")) return 6.5
+            // Afghanistan (+4.5)
+            if (c.contains("AFGHANISTAN") || c == "AF" || c.contains(", AF") || c.contains("KABUL")) return 4.5
+            // Iran (+3.5)
+            if (c.contains("IRAN") || c == "IR" || c.contains(", IR") || c.contains("TEHRAN")) return 3.5
+            // Newfoundland (-3.5)
+            if (c.contains("NEWFOUNDLAND") || c.contains("ST JOHN'S") || c.contains("ST. JOHN'S")) return -3.5
+
+            // India's coordinate box unavoidably borders countries on a DIFFERENT offset: Pakistan and
+            // the Central-Asian republics (+5:00 / +6:00) to the west, and Bangladesh/Bhutan (+6:00),
+            // Myanmar (+6:30), Thailand/Laos/Cambodia/Vietnam (+7:00) and China (+8:00) to the east. When
+            // the detected country names one of those, NEVER snap to India's +5.5 — this is the guard that
+            // keeps e.g. Lahore, Dhaka, Bangkok or Chiang Mai from being wrongly pulled to +5:30.
+            val cIsNonIndiaNeighbour =
+                c.contains("PAKISTAN") || c == "PK" || c.contains(", PK") ||
+                c.contains("KARACHI") || c.contains("LAHORE") || c.contains("ISLAMABAD") ||
+                c.contains("TAJIK") || c == "TJ" || c.contains("TURKMEN") || c == "TM" ||
+                c.contains("UZBEK") || c == "UZ" || c.contains("MALDIVES") || c == "MV" ||
+                c.contains("BANGLADESH") || c == "BD" || c.contains("DHAKA") ||
+                c.contains("BHUTAN") || c == "BT" || c.contains("THIMPHU") ||
+                c.contains("THAILAND") || c == "TH" || c.contains("BANGKOK") || c.contains("CHIANG") ||
+                c.contains("LAOS") || c == "LA" || c.contains("CAMBODIA") || c == "KH" ||
+                c.contains("VIETNAM") || c == "VN" || c.contains("CHINA") || c == "CN"
             // For India/Sri Lanka, if the offset is suspiciously +5.0 or +6.0, force +5.5.
-            val isIndiaOrSL = (lat in 5.0..38.0 && lng in 67.0..99.0) || 
+            val isIndiaOrSL = (lat in 5.0..38.0 && lng in 67.0..99.0) ||
                               c.contains("INDIA") || c.contains(", IN") || c.endsWith(" IN") || c == "IN" ||
                               c.contains("SRI LANKA") || c.contains(", LK") || c == "LK" || c.contains("COLOMBO")
-            if (isIndiaOrSL) {
+            if (isIndiaOrSL && !cIsNonIndiaNeighbour) {
+                // Snap a near-miss (within half an hour) to India's uniform +5:30 — this is what turns a
+                // rounded +5.0 detection back into +5.5 and fixes the dashboard clock / sunrise-sunset cards
+                // reading 30 minutes early. The neighbour guard above means a correctly-detected Pakistan
+                // (+5), Bangladesh (+6) or Thailand (+7) is never reached here, and the <= 0.6 window leaves
+                // anything more than 30 min away exactly as detected, so a far-off zone can't be clobbered.
                 if (Math.abs(detectedOffset - 5.5) <= 0.6) return 5.5
             }
-            // Nepal (+5.75)
-            val isNepal = (lat in 26.0..31.0 && lng in 80.0..89.0) || 
-                          c.contains("NEPAL") || c.contains(", NP") || c == "NP" || c.contains("KATHMANDU")
-            if (isNepal) {
-                if (Math.abs(detectedOffset - 5.75) <= 0.3) return 5.75
-            }
             // South/Central Australia (+9.5)
-            val isSCAust = (lat in -45.0..-10.0 && lng in 128.0..142.0) || 
+            val isSCAust = (lat in -45.0..-10.0 && lng in 128.0..142.0) ||
                            c.contains("ADELAIDE") || c.contains("DARWIN") || c.contains("SOUTH AUSTRALIA") || c.contains("NORTHERN TERRITORY")
             if (isSCAust) {
-                // Only if the offset is already around +9 or +10
+                // Only if the offset is already around +9 or +10 (the band overlaps +10 western Queensland,
+                // so a near-miss nudge is safer here than an unconditional coordinate snap).
                 if (Math.abs(detectedOffset - 9.5) <= 0.6) return 9.5
             }
             return detectedOffset

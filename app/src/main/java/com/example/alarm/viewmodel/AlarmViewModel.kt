@@ -698,8 +698,17 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             val list = repository.getActiveAlarms()
             val activeLocation = currentActiveLocation()
             for (alarm in list) {
+                // Self-heal a stale/rounded timezone offset (e.g. India +5.0 -> +5.5) against the alarm's
+                // OWN coordinates on EVERY recalc — not just the one-time init backfill. A bad offset
+                // introduced after launch (city switch, GPS re-detect, an alarm created while the live
+                // offset was transiently wrong) is corrected here, so the card/ring time can't stay 30 min
+                // off. recalibrate() preserves the offset it's given, so the heal must happen first.
+                val healedAlarm = if (alarm.hasLocation()) {
+                    val healed = LocationHelper.sanitizeOffset(alarm.latitude, alarm.longitude, alarm.timezoneOffset, alarm.locationName)
+                    if (healed != alarm.timezoneOffset) alarm.copy(timezoneOffset = healed) else alarm
+                } else alarm
                 // No date passed: each sun-alarm calibrates against "today" in its OWN city's timezone.
-                var updatedAlarm = SunAlarmResolver.recalibrate(alarm, activeLocation)
+                var updatedAlarm = SunAlarmResolver.recalibrate(healedAlarm, activeLocation)
                 // Hygiene: drop a stale (already-past) skipDate so it can't linger in the DB. The
                 // resolver already ignores past skip dates, so this is purely cleanup. Compared in the
                 // alarm's own zone via the recalibrated coordinates, falling back to the device zone.
@@ -762,9 +771,16 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** The location the app is currently showing — fallback for alarms with no recorded location. */
-    private fun currentActiveLocation() = SunAlarmResolver.Location(
-        _latitude.value, _longitude.value, _timezoneOffset.value, _locationName.value
-    )
+    private fun currentActiveLocation(): SunAlarmResolver.Location {
+        val lat = _latitude.value
+        val lng = _longitude.value
+        // Always hand out a coordinate-correct offset. Every alarm bound/recalibrated against the active
+        // location flows through here, so sanitising at this single chokepoint guarantees a transiently
+        // wrong live offset (e.g. a rounded India +5.0) can never be baked into a new/recalibrated alarm —
+        // which is what made the sunrise/sunset cards and the top-right clock read 30 minutes early.
+        val healedOffset = LocationHelper.sanitizeOffset(lat, lng, _timezoneOffset.value, _locationName.value)
+        return SunAlarmResolver.Location(lat, lng, healedOffset, _locationName.value)
+    }
 
     // Alarm management actions
     fun toggleAlarmActive(alarm: Alarm) {
@@ -927,11 +943,15 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         locationHelper.cancelLocationRequest()
         _isDetectingLocation.value = false
         locationHelper.setAutoDetect(false)
-        locationHelper.saveLocation(city.latitude, city.longitude, city.timezoneOffset, city.name)
-        
+        // Re-sanitise the chosen city's offset against its own coordinates so a stale saved city that
+        // somehow holds a rounded offset (e.g. India +5.0) is corrected the moment it becomes active —
+        // keeping the dashboard clock and sun cards in step with the location instead of 30 min early.
+        val healedOffset = LocationHelper.sanitizeOffset(city.latitude, city.longitude, city.timezoneOffset, city.name)
+        locationHelper.saveLocation(city.latitude, city.longitude, healedOffset, city.name)
+
         _latitude.value = city.latitude
         _longitude.value = city.longitude
-        _timezoneOffset.value = city.timezoneOffset
+        _timezoneOffset.value = healedOffset
         _locationName.value = city.name
 
         recomputeSunTimes() // recomputeSunTimes() already refreshes weather for the new coordinates

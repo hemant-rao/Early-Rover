@@ -726,6 +726,7 @@ fun TravelAlarmScreen(
                             }
                         },
                         speedKmh = currentSpeed,
+                        currentLocation = currentLocation,
                         isHindi = isHindi,
                         isTrackingActive = isTracking,
                         t = ::t
@@ -1391,6 +1392,7 @@ fun TravelAlarmCard(
     onEdit: () -> Unit,
     onUpdateRadius: (Double) -> Unit,
     speedKmh: Double = 0.0,
+    currentLocation: android.location.Location? = null,
     isHindi: Boolean,
     isTrackingActive: Boolean,
     t: (String, String) -> String
@@ -1513,6 +1515,66 @@ fun TravelAlarmCard(
                 color = SleekPrimary,
                 modifier = Modifier.padding(bottom = 2.dp)
             )
+
+            // Live distance from the user's CURRENT location to THIS waypoint. Updates on every
+            // GPS fix while the journey tracker is running, so the user always sees how far each
+            // saved destination still is (and whether they're already inside its trigger radius).
+            val liveDistanceKm: Double? = remember(currentLocation, alarm.latitude, alarm.longitude) {
+                currentLocation?.let { loc ->
+                    val res = FloatArray(1)
+                    android.location.Location.distanceBetween(
+                        loc.latitude, loc.longitude, alarm.latitude, alarm.longitude, res
+                    )
+                    res[0] / 1000.0
+                }
+            }
+            if (isTrackingActive && alarm.active && liveDistanceKm != null) {
+                val arrived = liveDistanceKm <= alarm.radiusKm
+                val accentColor = if (arrived) Color(0xFF10B981) else SleekPrimary
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(accentColor.copy(alpha = 0.12f))
+                        .padding(vertical = 6.dp, horizontal = 10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.MyLocation,
+                                contentDescription = null,
+                                tint = accentColor,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (arrived) {
+                                    t("Inside alert zone — arriving", "अलर्ट ज़ोन के अंदर — पहुँच रहे हैं")
+                                } else {
+                                    t("Live distance remaining", "बची हुई लाइव दूरी")
+                                },
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = accentColor
+                            )
+                        }
+                        Text(
+                            text = if (liveDistanceKm < 1.0) {
+                                String.format(Locale.US, "%.0f m", liveDistanceKm * 1000.0)
+                            } else {
+                                String.format(Locale.US, "%.2f km", liveDistanceKm)
+                            },
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Black,
+                            color = accentColor
+                        )
+                    }
+                }
+            }
 
             Row(
 
