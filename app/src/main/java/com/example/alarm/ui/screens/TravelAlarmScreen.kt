@@ -111,6 +111,9 @@ fun TravelAlarmScreen(
     // city. The result is delivered ONLY through triggerTravelStartLocation's callback.
     var awaitingGpsForStart by remember { mutableStateOf(false) }
     val isDetectingLocation by viewModel.isDetectingLocation.collectAsStateWithLifecycle()
+    
+    // Deletion confirmation
+    var alarmToDelete by remember { mutableStateOf<com.example.alarm.data.TravelAlarm?>(null) }
 
     // Remote lookup parameters
     var searchQuery by remember { mutableStateOf("") }
@@ -676,7 +679,7 @@ fun TravelAlarmScreen(
                                     android.widget.Toast.LENGTH_LONG
                                 ).show()
                             } else {
-                                viewModel.deleteTravelAlarm(alarm)
+                                alarmToDelete = alarm
                             }
                         },
                         onEdit = {
@@ -733,6 +736,30 @@ fun TravelAlarmScreen(
                     )
                 }
             }
+        }
+
+        // Delete Confirmation Dialog
+        if (alarmToDelete != null) {
+            AlertDialog(
+                onDismissRequest = { alarmToDelete = null },
+                title = { Text(t("Delete Alarm", "अलार्म हटाएं")) },
+                text = { Text(t("Are you sure you want to delete this travel alarm?", "क्या आप इस सफ़र अलार्म को हटाना चाहते हैं?")) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            viewModel.deleteTravelAlarm(alarmToDelete!!)
+                            alarmToDelete = null
+                        }
+                    ) {
+                        Text(t("Delete", "हटाएं"), color = Color.Red)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { alarmToDelete = null }) {
+                        Text(t("Cancel", "रद्द करें"))
+                    }
+                }
+            )
         }
 
         // Add Dialog placed SAFELY at top composable level (outside the LazyColumn structural context!)
@@ -917,6 +944,7 @@ fun TravelAlarmScreen(
                                     properties = androidx.compose.ui.window.PopupProperties(focusable = false),
                                     modifier = Modifier
                                         .fillMaxWidth(0.9f)
+                                        .heightIn(max = 250.dp)
                                         .background(SleekCardBg)
                                         .border(BorderStroke(1.dp, SleekBorder), RoundedCornerShape(12.dp))
                                 ) {
@@ -1062,6 +1090,7 @@ fun TravelAlarmScreen(
                                     properties = androidx.compose.ui.window.PopupProperties(focusable = false),
                                     modifier = Modifier
                                         .fillMaxWidth(0.9f)
+                                        .heightIn(max = 250.dp)
                                         .background(SleekCardBg)
                                         .border(BorderStroke(1.dp, SleekBorder), RoundedCornerShape(12.dp))
                                 ) {

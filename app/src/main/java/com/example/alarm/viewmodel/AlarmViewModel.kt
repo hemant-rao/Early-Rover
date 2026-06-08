@@ -35,12 +35,23 @@ data class RingingAlarmState(
     val id: Int,
     val title: String,
     val type: String,
-    val snoozeEnabled: Boolean = true
+    val snoozeEnabled: Boolean = true,
+    val isExactAlso: Boolean = false
+)
+
+data class AlarmProfile(
+    val id: String,
+    val name: String,
+    val sunriseOffset: Int,
+    val sunsetOffset: Int,
+    val vibrationPattern: String
 )
 
 enum class ThemeMode { LIGHT, DARK, AUTO }
 
 class AlarmViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val settingsPrefs = application.getSharedPreferences("sun_alarm_settings_prefs", Context.MODE_PRIVATE)
 
     private val database = AppDatabase.getDatabase(application)
     private val repository = AlarmRepository(database.alarmDao(), database.travelAlarmDao())
@@ -154,8 +165,159 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     private val _savedCities = MutableStateFlow<List<CityInfo>>(emptyList())
     val savedCities: StateFlow<List<CityInfo>> = _savedCities.asStateFlow()
 
-    // System Settings preferences
-    private val settingsPrefs = application.getSharedPreferences("sun_alarm_settings_prefs", Context.MODE_PRIVATE)
+    // Feature toggles
+    private val FEATURE_WEATHER = "feature_weather"
+    private val FEATURE_SOLAR_TRENDS = "feature_solar_trends"
+    private val FEATURE_TRAVEL = "feature_travel"
+    private val FEATURE_LOCATION = "feature_location"
+
+    private val _isWeatherEnabled = MutableStateFlow(settingsPrefs.getBoolean(FEATURE_WEATHER, true))
+    val isWeatherEnabled: StateFlow<Boolean> = _isWeatherEnabled.asStateFlow()
+
+    private val _isSolarTrendsEnabled = MutableStateFlow(settingsPrefs.getBoolean(FEATURE_SOLAR_TRENDS, true))
+    val isSolarTrendsEnabled: StateFlow<Boolean> = _isSolarTrendsEnabled.asStateFlow()
+
+    private val _isTravelEnabled = MutableStateFlow(settingsPrefs.getBoolean(FEATURE_TRAVEL, true))
+    val isTravelEnabled: StateFlow<Boolean> = _isTravelEnabled.asStateFlow()
+
+    private val _isLocationEnabled = MutableStateFlow(settingsPrefs.getBoolean(FEATURE_LOCATION, true))
+    val isLocationEnabled: StateFlow<Boolean> = _isLocationEnabled.asStateFlow()
+
+    fun setFeatureEnabled(key: String, enabled: Boolean) {
+        when(key) {
+            FEATURE_WEATHER -> {
+                _isWeatherEnabled.value = enabled
+                settingsPrefs.edit().putBoolean(FEATURE_WEATHER, enabled).apply()
+            }
+            FEATURE_SOLAR_TRENDS -> {
+                _isSolarTrendsEnabled.value = enabled
+                settingsPrefs.edit().putBoolean(FEATURE_SOLAR_TRENDS, enabled).apply()
+            }
+            FEATURE_TRAVEL -> {
+                _isTravelEnabled.value = enabled
+                settingsPrefs.edit().putBoolean(FEATURE_TRAVEL, enabled).apply()
+            }
+            FEATURE_LOCATION -> {
+                _isLocationEnabled.value = enabled
+                settingsPrefs.edit().putBoolean(FEATURE_LOCATION, enabled).apply()
+            }
+        }
+    }
+
+    // Alarm Profiles State Management
+    private val defaultAlarmProfiles = listOf(
+        AlarmProfile("work", "Work Week", -15, 15, "Steady"),
+        AlarmProfile("weekend", "Weekend", 30, 30, "Heartbeat"),
+        AlarmProfile("mindful", "Yoga & Zen", -30, 0, "Quick Pulses")
+    )
+
+    private val _activeProfileId = MutableStateFlow(settingsPrefs.getString("active_profile_id", "work") ?: "work")
+    val activeProfileId: StateFlow<String> = _activeProfileId.asStateFlow()
+
+    private val _alarmProfiles = MutableStateFlow<List<AlarmProfile>>(emptyList())
+    val alarmProfiles: StateFlow<List<AlarmProfile>> = _alarmProfiles.asStateFlow()
+
+    init {
+        _alarmProfiles.value = loadAlarmProfilesFromPrefs()
+        // Ensure defaults are saved if preferences are empty
+        if (settingsPrefs.getString("saved_alarm_profiles", null) == null) {
+            saveAlarmProfilesToPrefs(defaultAlarmProfiles)
+        }
+    }
+
+    private fun loadAlarmProfilesFromPrefs(): List<AlarmProfile> {
+        val serialized = settingsPrefs.getString("saved_alarm_profiles", null) ?: return defaultAlarmProfiles
+        if (serialized.isEmpty()) return defaultAlarmProfiles
+        
+        return try {
+            serialized.split("|").mapNotNull { block ->
+                val parts = block.split(";")
+                if (parts.size >= 5) {
+                    AlarmProfile(
+                        id = parts[0],
+                        name = parts[1].replace("%3B", ";").replace("%7C", "|"),
+                        sunriseOffset = parts[2].toIntOrNull() ?: 0,
+                        sunsetOffset = parts[3].toIntOrNull() ?: 0,
+                        vibrationPattern = parts[4]
+                    )
+                } else null
+            }
+        } catch (e: Exception) {
+            defaultAlarmProfiles
+        }
+    }
+
+    private fun saveAlarmProfilesToPrefs(list: List<AlarmProfile>) {
+        val serialized = list.joinToString("|") { profile ->
+            val safeName = profile.name.replace(";", "%3B").replace("|", "%7C")
+            "${profile.id};${safeName};${profile.sunriseOffset};${profile.sunsetOffset};${profile.vibrationPattern}"
+        }
+        settingsPrefs.edit().putString("saved_alarm_profiles", serialized).apply()
+        _alarmProfiles.value = list
+    }
+
+    fun selectProfile(id: String) {
+        val profile = _alarmProfiles.value.firstOrNull { it.id == id } ?: return
+        _activeProfileId.value = id
+        settingsPrefs.edit()
+            .putString("active_profile_id", id)
+            .putString("active_vibration_pattern", profile.vibrationPattern)
+            .apply()
+        
+        applyProfileToAlarms(profile)
+    }
+
+    fun saveProfile(profile: AlarmProfile) {
+        val currentList = _alarmProfiles.value.toMutableList()
+        val index = currentList.indexOfFirst { it.id == profile.id }
+        if (index != -1) {
+            currentList[index] = profile
+        } else {
+            currentList.add(profile)
+        }
+        saveAlarmProfilesToPrefs(currentList)
+        
+        // If saved profile is active, re-select to apply offsets immediately
+        if (_activeProfileId.value == profile.id) {
+            selectProfile(profile.id)
+        }
+    }
+
+    fun deleteProfile(id: String) {
+        if (id == _activeProfileId.value) return
+        val currentList = _alarmProfiles.value.filter { it.id != id }
+        saveAlarmProfilesToPrefs(currentList)
+    }
+
+    fun applyProfileToAlarms(profile: AlarmProfile) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val all = allAlarms.value
+            all.forEach { alarm ->
+                var updated: Alarm? = null
+                if (alarm.alarmType == "SUNRISE" && alarm.offsetMinutes != profile.sunriseOffset) {
+                    updated = alarm.copy(offsetMinutes = profile.sunriseOffset, updatedAt = System.currentTimeMillis())
+                } else if (alarm.alarmType == "SUNSET" && alarm.offsetMinutes != profile.sunsetOffset) {
+                    updated = alarm.copy(offsetMinutes = profile.sunsetOffset, updatedAt = System.currentTimeMillis())
+                }
+                
+                if (updated != null) {
+                    val loc = if (updated.hasLocation()) {
+                        SunAlarmResolver.Location(
+                            latitude = updated.latitude,
+                            longitude = updated.longitude,
+                            timezoneOffset = updated.timezoneOffset,
+                            name = updated.locationName
+                        )
+                    } else {
+                        currentActiveLocation()
+                    }
+                    val recalibrated = SunAlarmResolver.recalibrate(updated, loc)
+                    repository.updateAlarm(recalibrated)
+                    scheduler.schedule(recalibrated)
+                }
+            }
+        }
+    }
 
     // Adaptive theme mode. Defaults derive from the legacy "dark_theme" flag for back-compat.
     private val _themeMode = MutableStateFlow(
@@ -180,7 +342,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Resolves the active theme: AUTO follows daylight at the location; DARK/LIGHT are explicit. */
-    fun isEffectiveDark(isDayAtLocation: Boolean): Boolean = when (_themeMode.value) {
+    fun isEffectiveDark(mode: ThemeMode, isDayAtLocation: Boolean): Boolean = when (mode) {
         ThemeMode.AUTO -> !isDayAtLocation
         ThemeMode.DARK -> true
         ThemeMode.LIGHT -> false
@@ -302,6 +464,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "Mon-Fri" to "सोम-शुक्र",
         "Custom" to "कस्टम",
         "Sunrise" to "सूर्योदय",
+        "3D Solar Arc progression" to "3D सौर आर्क प्रगति",
+        "Progression with selected active alarm indicators" to "सक्रिय अलार्म संकेतकों के साथ दिन की प्रगति",
+        "Alarms" to "अलार्म",
         "Sunset" to "सूर्यास्त",
         "Add Standard Alarm" to "सामान्य अलार्म जोड़ें",
         "Use the Sunrise/Sunset cards above or the Add Standard Alarm button to schedule alarms." to "अलार्म सेट करने के लिए सूर्योदय/सूर्यास्त या सामान्य अलार्म बटन का उपयोग करें।",
@@ -317,7 +482,8 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "Instantly adjust to where you are standing." to "ऑटोमैटिक आपकी मौजूद जगह ले लेगा।",
         "Why set location?" to "लोकेशन चुनना क्यों ज़रूरी है?",
         "We calculate the exact sunrise and sunset times automatically for your location, even without internet!" to "हम बिना इंटरनेट के भी आपके स्थान के हिसाब से सूर्योदय और सूर्यास्त का बिल्कुल सही समय निकालते हैं!",
-        "Trigger exactly during event (Sunrise/Sunset)" to "ठीक सूर्योदय या सूर्यास्त के समय अलार्म बजाएँ",
+        "Trigger exactly at Sunrise" to "ठीक सूर्योदय के समय अलार्म बजाएँ",
+        "Trigger exactly at Sunset" to "ठीक सूर्यास्त के समय अलार्म बजाएँ",
         "Fires at the precise moment of astronomical rise/set" to "सटीक उदय या अस्त के समय बजेगा",
         "Configure Clock Time" to "अलार्म का समय सेट करें",
         "Based on location, triggers today at" to "लोकेशन के हिसाब से, आज बजेगा: ",
@@ -342,9 +508,13 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "At Event" to "ठीक समय पर",
         "AM" to "सुबह (AM)",
         "PM" to "शाम (PM)",
+        "Conch Sound" to "शंख ध्वनि",
+        "Premium Sound" to "प्रीमियम ध्वनि",
         "Ringtone" to "रिंगटोन",
         "Select Alarm Tone" to "रिंगटोन चुनें",
         "Alarm Tone" to "रिंगटोन",
+        "Custom Audio File" to "अन्य वॉइस / ऑडियो फ़ाइल",
+        "Device storage / voice recording" to "फ़ोन स्टोरेज / वॉइस रिकॉर्डिंग",
         "Default Alarm" to "डिफ़ॉल्ट अलार्म टोन",
         "Default Alarm Sound" to "फ़ोन की डिफ़ॉल्ट अलार्म ध्वनि",
         // Settings reliability / about section (wrapped in translate() in SettingsScreen).
@@ -698,17 +868,8 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             val list = repository.getActiveAlarms()
             val activeLocation = currentActiveLocation()
             for (alarm in list) {
-                // Self-heal a stale/rounded timezone offset (e.g. India +5.0 -> +5.5) against the alarm's
-                // OWN coordinates on EVERY recalc — not just the one-time init backfill. A bad offset
-                // introduced after launch (city switch, GPS re-detect, an alarm created while the live
-                // offset was transiently wrong) is corrected here, so the card/ring time can't stay 30 min
-                // off. recalibrate() preserves the offset it's given, so the heal must happen first.
-                val healedAlarm = if (alarm.hasLocation()) {
-                    val healed = LocationHelper.sanitizeOffset(alarm.latitude, alarm.longitude, alarm.timezoneOffset, alarm.locationName)
-                    if (healed != alarm.timezoneOffset) alarm.copy(timezoneOffset = healed) else alarm
-                } else alarm
                 // No date passed: each sun-alarm calibrates against "today" in its OWN city's timezone.
-                var updatedAlarm = SunAlarmResolver.recalibrate(healedAlarm, activeLocation)
+                var updatedAlarm = SunAlarmResolver.recalibrate(alarm, activeLocation)
                 // Hygiene: drop a stale (already-past) skipDate so it can't linger in the DB. The
                 // resolver already ignores past skip dates, so this is purely cleanup. Compared in the
                 // alarm's own zone via the recalibrated coordinates, falling back to the device zone.
@@ -771,16 +932,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** The location the app is currently showing — fallback for alarms with no recorded location. */
-    private fun currentActiveLocation(): SunAlarmResolver.Location {
-        val lat = _latitude.value
-        val lng = _longitude.value
-        // Always hand out a coordinate-correct offset. Every alarm bound/recalibrated against the active
-        // location flows through here, so sanitising at this single chokepoint guarantees a transiently
-        // wrong live offset (e.g. a rounded India +5.0) can never be baked into a new/recalibrated alarm —
-        // which is what made the sunrise/sunset cards and the top-right clock read 30 minutes early.
-        val healedOffset = LocationHelper.sanitizeOffset(lat, lng, _timezoneOffset.value, _locationName.value)
-        return SunAlarmResolver.Location(lat, lng, healedOffset, _locationName.value)
-    }
+    private fun currentActiveLocation() = SunAlarmResolver.Location(
+        _latitude.value, _longitude.value, _timezoneOffset.value, _locationName.value
+    )
 
     // Alarm management actions
     fun toggleAlarmActive(alarm: Alarm) {
@@ -877,11 +1031,15 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
             active = true
         )
         viewModelScope.launch(Dispatchers.IO) {
-            // Bind to the active city (sets coordinates + timezone, not just the name) so the alarm is
-            // self-contained and hasLocation() is true with REAL coords, not (0,0).
-            val alarm = SunAlarmResolver.recalibrate(draft, currentActiveLocation())
-            val savedId = repository.insertAlarm(alarm)
-            scheduler.schedule(alarm.copy(id = savedId.toInt()))
+            try {
+                // Bind to the active city (sets coordinates + timezone, not just the name) so the alarm is
+                // self-contained and hasLocation() is true with REAL coords, not (0,0).
+                val alarm = SunAlarmResolver.recalibrate(draft, currentActiveLocation())
+                val savedId = repository.insertAlarm(alarm)
+                scheduler.schedule(alarm.copy(id = savedId.toInt()))
+            } catch (e: Exception) {
+                android.util.Log.e("AlarmViewModel", "Failed to schedule sun alarm", e)
+            }
         }
     }
 
@@ -943,15 +1101,11 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         locationHelper.cancelLocationRequest()
         _isDetectingLocation.value = false
         locationHelper.setAutoDetect(false)
-        // Re-sanitise the chosen city's offset against its own coordinates so a stale saved city that
-        // somehow holds a rounded offset (e.g. India +5.0) is corrected the moment it becomes active —
-        // keeping the dashboard clock and sun cards in step with the location instead of 30 min early.
-        val healedOffset = LocationHelper.sanitizeOffset(city.latitude, city.longitude, city.timezoneOffset, city.name)
-        locationHelper.saveLocation(city.latitude, city.longitude, healedOffset, city.name)
-
+        locationHelper.saveLocation(city.latitude, city.longitude, city.timezoneOffset, city.name)
+        
         _latitude.value = city.latitude
         _longitude.value = city.longitude
-        _timezoneOffset.value = healedOffset
+        _timezoneOffset.value = city.timezoneOffset
         _locationName.value = city.name
 
         recomputeSunTimes() // recomputeSunTimes() already refreshes weather for the new coordinates
@@ -1064,13 +1218,14 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // Alarm Trigger Ring interactions
-    fun setRingingState(id: Int, title: String, type: String, snoozeEnabled: Boolean = true) {
-        _ringingAlarm.value = RingingAlarmState(id, title, type, snoozeEnabled)
+    fun setRingingState(id: Int, title: String, type: String, snoozeEnabled: Boolean = true, isExactAlso: Boolean = false) {
+        _ringingAlarm.value = RingingAlarmState(id, title, type, snoozeEnabled, isExactAlso)
     }
 
     fun stopRingingAlarmAndDismiss() {
         val ringing = _ringingAlarm.value
         val ringingId = ringing?.id ?: -1
+        val isExactAlso = ringing?.isExactAlso ?: false
         _ringingAlarm.value = null
 
         val context = getApplication<Application>()
@@ -1083,6 +1238,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 putExtra("ALARM_ID", ringingId)
                 putExtra("ALARM_TITLE", ringing?.title ?: "Alarm")
                 putExtra("ALARM_TYPE", ringing?.type ?: "CUSTOM")
+                putExtra("IS_EXACT_ALSO", isExactAlso)
             }
             context.startService(dismissIntent)
         }
@@ -1091,6 +1247,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     fun stopRingingAlarmAndSnooze() {
         val ringing = _ringingAlarm.value
         val ringingId = ringing?.id ?: -1
+        val isExactAlso = ringing?.isExactAlso ?: false
         _ringingAlarm.value = null
 
         val context = getApplication<Application>()
@@ -1104,6 +1261,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                 // downgraded to the default "Alarm"/"CUSTOM" (matches the notification-button path).
                 putExtra("ALARM_TITLE", ringing?.title ?: "Alarm")
                 putExtra("ALARM_TYPE", ringing?.type ?: "CUSTOM")
+                putExtra("IS_EXACT_ALSO", isExactAlso)
             }
             context.startService(snoozeIntent)
         }
@@ -1136,11 +1294,14 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
 
     fun addSavedCity(city: CityInfo) {
         val current = _savedCities.value.toMutableList()
-        if (current.none { it.sameCityAs(city) }) {
+        val index = current.indexOfFirst { it.sameCityAs(city) }
+        if (index != -1) {
+            current[index] = city
+        } else {
             current.add(city)
-            _savedCities.value = current
-            saveCitiesToPrefs(current)
         }
+        _savedCities.value = current
+        saveCitiesToPrefs(current)
         setManualCitySelection(city)
     }
 
@@ -1227,6 +1388,74 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         TravelTrackingService.stopService(context)
     }
 
+    fun resetAppSettings() {
+        // Reset feature toggles to true
+        setFeatureEnabled(FEATURE_WEATHER, true)
+        setFeatureEnabled(FEATURE_SOLAR_TRENDS, true)
+        setFeatureEnabled(FEATURE_TRAVEL, true)
+        setFeatureEnabled(FEATURE_LOCATION, true)
+        
+        // Reset snooze
+        setDefaultSnoozeMinutes(5)
+        
+        // Reset theme
+        setThemeMode(ThemeMode.AUTO)
+    }
+
+    fun clearAllData() {
+        viewModelScope.launch(Dispatchers.IO) {
+            // Clear repository data
+            repository.deleteAllAlarms()
+            repository.deleteAllTravelAlarms()
+            
+            // Clear location data
+            val defaultCity = CityInfo(
+                "Detecting Location...",
+                "...",
+                locationHelper.getSavedLatitude(),
+                locationHelper.getSavedLongitude(),
+                _timezoneOffset.value
+            )
+            val initialList = listOf(defaultCity)
+            _savedCities.value = initialList
+            saveCitiesToPrefs(initialList)
+            
+            // Re-trigger location detection
+            triggerAutoLocationDetect()
+        }
+    }
+
+    fun getAdviceForUpcomingAlarm(): String? {
+        val alarm = _nextUpcomingAlarm.value ?: return null
+        if (alarm.alarmType != "SUNRISE") return null
+        
+        val weatherData = _detailedWeather.value ?: return null
+        
+        // Find hourly detail closest to alarm time
+        val hour = alarm.hour
+        val minute = alarm.minute
+        
+        val targetTime = java.time.LocalTime.of(hour, minute)
+        
+        val closestHour = weatherData.hourlyList.minByOrNull { hourly ->
+            val time = java.time.LocalDateTime.parse(hourly.timeIso).toLocalTime()
+            kotlin.math.abs(java.time.Duration.between(targetTime, time).toMinutes())
+        } ?: return null
+        
+        return com.example.alarm.weather.WeatherAdviser.getAdvice(closestHour.condition, closestHour.precipitationMm)
+    }
+
+    fun stopTravelTrackingAndDisableFeature() {
+        viewModelScope.launch(Dispatchers.IO) {
+            // Stop service
+            TravelTrackingService.stopService(getApplication())
+            // Clear travel alarms
+            repository.deleteAllTravelAlarms()
+            // Disable feature
+            setFeatureEnabled(FEATURE_TRAVEL, false)
+        }
+    }
+    
     companion object {
         // Single shared definition of "same city" used by both the per-location alarm filter and the
         // auto-detect dedup, so list visibility and detection agree (~1.1 km at the equator).

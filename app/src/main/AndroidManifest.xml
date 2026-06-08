@@ -39,6 +39,8 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
             android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize|screenLayout"
             android:label="@string/app_name"
             android:theme="@style/Theme.MyApplication">
@@ -47,15 +49,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".alarm.ui.AlarmActivity"
-            android:exported="false"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
-            android:launchMode="singleInstance"
-            android:theme="@style/Theme.MyApplication"
-            android:excludeFromRecents="true" />
 
         <!-- Background active alarm ringing companion service.
              specialUse (not mediaPlayback): this FGS only rings/vibrates an alarm; it has no

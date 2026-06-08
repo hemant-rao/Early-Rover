@@ -1,5 +1,8 @@
 package com.example.alarm.ui.screens
 
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,6 +18,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.ui.layout.layout
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -57,6 +61,8 @@ import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import com.example.alarm.data.Alarm
 import com.example.alarm.data.SunAlarmResolver
 import com.example.alarm.opengl.Celestial3DView
+import com.example.alarm.opengl.Sun3DProgressionView
+import java.time.LocalTime
 import com.example.alarm.ui.weather.WeatherBackground
 import com.example.alarm.weather.AirQualityInfo
 import com.example.alarm.viewmodel.AlarmViewModel
@@ -70,6 +76,14 @@ import java.util.Locale
 import kotlin.math.roundToInt
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,6 +94,8 @@ fun DashboardScreen(
     onNavigateToLocation: () -> Unit,
     onNavigateToSettings: () -> Unit,
     onNavigateToManageCities: () -> Unit,
+    onNavigateToPrivacyPolicy: () -> Unit,
+    onNavigateToTermsConditions: () -> Unit,
     requestedTab: Int? = null,
     onTabConsumed: () -> Unit = {}
 ) {
@@ -113,6 +129,31 @@ fun DashboardScreen(
     var deleteDialogAlarm by remember { mutableStateOf<Alarm?>(null) }
     
     val isTravelTrackingActive by viewModel.isTravelTrackingActive.collectAsStateWithLifecycle()
+
+    val permissionContext = LocalContext.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    var hasLocationPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(permissionContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(permissionContext, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                hasLocationPermission = ContextCompat.checkSelfPermission(permissionContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                        ContextCompat.checkSelfPermission(permissionContext, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val dashListState = rememberSaveable(saver = androidx.compose.foundation.lazy.LazyListState.Saver) { androidx.compose.foundation.lazy.LazyListState() }
+    val isWeatherEnabled by viewModel.isWeatherEnabled.collectAsStateWithLifecycle()
+    val isSolarTrendsEnabled by viewModel.isSolarTrendsEnabled.collectAsStateWithLifecycle()
+    val isTravelEnabled by viewModel.isTravelEnabled.collectAsStateWithLifecycle()
 
     // Shared OFF-toggle handler: repeating alarms prompt skip-vs-turn-off; one-time alarms toggle directly.
     val onAlarmToggle: (Alarm) -> Unit = { alarm ->
@@ -240,7 +281,7 @@ fun DashboardScreen(
     // Reading themeMode here makes this recompute when the user changes Light/Dark/Auto;
     // AUTO additionally follows daylight at the active location.
     val darkTheme = remember(themeMode, isDayAtLocation) {
-        viewModel.isEffectiveDark(isDayAtLocation)
+        viewModel.isEffectiveDark(themeMode, isDayAtLocation)
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -258,7 +299,7 @@ fun DashboardScreen(
             .fillMaxSize()
             .testTag("dashboard_screen"),
         containerColor = Color.Transparent,
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        contentWindowInsets = WindowInsets.systemBars.only(WindowInsetsSides.Top),
         bottomBar = {
             // Elegant Sleek Bottom Navigation Bar with 4 equal elements
             Box(
@@ -310,58 +351,62 @@ fun DashboardScreen(
                     }
 
                     // 2. TRAVEL Tab
-                    Box(
-                        modifier = tabModifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .clickable { activeTab = 3 }
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
+                    if (isTravelEnabled) {
+                        Box(
+                            modifier = tabModifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { activeTab = 3 }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Explore,
-                                contentDescription = "Travel",
-                                tint = if (activeTab == 3) SleekPrimary else SleekMutedText.copy(alpha = 0.7f),
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = viewModel.translate("TRAVEL"),
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (activeTab == 3) SleekPrimary else SleekMutedText.copy(alpha = 0.7f)
-                            )
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Explore,
+                                    contentDescription = "Travel",
+                                    tint = if (activeTab == 3) SleekPrimary else SleekMutedText.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = viewModel.translate("TRAVEL"),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (activeTab == 3) SleekPrimary else SleekMutedText.copy(alpha = 0.7f)
+                                )
+                            }
                         }
                     }
  
                     // 3. WEATHER Tab
-                    Box(
-                        modifier = tabModifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .clickable { activeTab = 1 }
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
+                    if (isWeatherEnabled) {
+                        Box(
+                            modifier = tabModifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { activeTab = 1 }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.WbSunny,
-                                contentDescription = "Weather",
-                                tint = if (activeTab == 1) SleekPrimary else SleekMutedText.copy(alpha = 0.7f),
-                                modifier = Modifier.size(22.dp)
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = viewModel.translate("WEATHER"),
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (activeTab == 1) SleekPrimary else SleekMutedText.copy(alpha = 0.7f)
-                            )
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.WbSunny,
+                                    contentDescription = "Weather",
+                                    tint = if (activeTab == 1) SleekPrimary else SleekMutedText.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = viewModel.translate("WEATHER"),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (activeTab == 1) SleekPrimary else SleekMutedText.copy(alpha = 0.7f)
+                                )
+                            }
                         }
                     }
  
@@ -400,9 +445,16 @@ fun DashboardScreen(
         // Settings and Travel have their own horizontal content and must not be hijacked.
         val activeSwipeModifier = if (activeTab == 0 || activeTab == 1) swipeModifier else Modifier
         Box(modifier = Modifier.fillMaxSize().then(activeSwipeModifier).padding(bottom = innerPadding.calculateBottomPadding())) {
-            when (activeTab) {
-                0 -> { // DASH
+            @OptIn(ExperimentalAnimationApi::class)
+            androidx.compose.animation.Crossfade(
+                targetState = activeTab,
+                animationSpec = tween(500),
+                label = "tab_switch"
+            ) { targetTab ->
+                when (targetTab) {
+                0 -> {
                     LazyColumn(
+                        state = dashListState,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(top = innerPadding.calculateTopPadding()),
@@ -457,7 +509,16 @@ fun DashboardScreen(
                                     headerScope = headerScope,
                                     viewModel = viewModel,
                                     onAddLocationClick = { showLocationSearchDialog = true },
-                                    onManageCitiesClick = onNavigateToManageCities
+                                    onManageCitiesClick = onNavigateToManageCities,
+                                    hasLocationPermission = hasLocationPermission,
+                                    onRequestLocationPermission = {
+                                        dashboardPermissionLauncher.launch(
+                                            arrayOf(
+                                                Manifest.permission.ACCESS_FINE_LOCATION,
+                                                Manifest.permission.ACCESS_COARSE_LOCATION
+                                            )
+                                        )
+                                    }
                                 )
 
                                 Spacer(modifier = Modifier.height(12.dp))
@@ -511,11 +572,11 @@ fun DashboardScreen(
                                     val sunsetAlarm = alarms.find { it.alarmType == "SUNSET" }
                                     val today = java.time.LocalDate.now()
                                     val sunriseTimeLocalized = com.example.alarm.data.SunAlarmResolver.fireTimeOn(
-                                        (sunriseAlarm ?: com.example.alarm.data.Alarm(title = "Sunrise", alarmType = "SUNRISE", hour = 6, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName)).withHealedTimezoneOffset(),
+                                        sunriseAlarm ?: com.example.alarm.data.Alarm(title = "Sunrise", alarmType = "SUNRISE", hour = 6, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName),
                                         today
                                     )
                                     val sunsetTimeLocalized = com.example.alarm.data.SunAlarmResolver.fireTimeOn(
-                                        (sunsetAlarm ?: com.example.alarm.data.Alarm(title = "Sunset", alarmType = "SUNSET", hour = 18, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName)).withHealedTimezoneOffset(),
+                                        sunsetAlarm ?: com.example.alarm.data.Alarm(title = "Sunset", alarmType = "SUNSET", hour = 18, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName),
                                         today
                                     )
 
@@ -579,19 +640,21 @@ fun DashboardScreen(
                         // shows a compact temp + time widget instead (see CompactWeatherTimeWidget).
 
                         // TRAVEL on home: active-journey tracker (if any) then an Add Travel Alarm CTA.
-                        if (isTravelTrackingActive) {
+                        if (isTravelEnabled) {
+                            if (isTravelTrackingActive) {
+                                item {
+                                    JourneyActiveCard(
+                                        viewModel = viewModel,
+                                        onClick = { activeTab = 3 }
+                                    )
+                                }
+                            }
                             item {
-                                JourneyActiveCard(
+                                AddTravelAlarmCard(
                                     viewModel = viewModel,
                                     onClick = { activeTab = 3 }
                                 )
                             }
-                        }
-                        item {
-                            AddTravelAlarmCard(
-                                viewModel = viewModel,
-                                onClick = { activeTab = 3 }
-                            )
                         }
 
                         // ADD ALARM BUTTON
@@ -676,6 +739,19 @@ fun DashboardScreen(
                                                 fontSize = 12.sp,
                                                 color = Color.White.copy(alpha = 0.9f)
                                             )
+                                            
+                                            if (nextAlarm?.alarmType == "SUNRISE") {
+                                                val advice = viewModel.getAdviceForUpcomingAlarm()
+                                                if (advice != null) {
+                                                    Spacer(modifier = Modifier.height(6.dp))
+                                                    Text(
+                                                        text = "☀ " + advice,
+                                                        fontSize = 12.sp,
+                                                        color = Color(0xFFFDE68A), // Light aesthetic yellow
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                }
+                                            }
                                         }
 
                                         val na = nextAlarm
@@ -801,25 +877,36 @@ fun DashboardScreen(
                                 headerScope = headerScope,
                                 viewModel = viewModel,
                                 onAddLocationClick = { showLocationSearchDialog = true },
-                                onManageCitiesClick = onNavigateToManageCities
+                                onManageCitiesClick = onNavigateToManageCities,
+                                hasLocationPermission = hasLocationPermission,
+                                onRequestLocationPermission = {
+                                    dashboardPermissionLauncher.launch(
+                                        arrayOf(
+                                            Manifest.permission.ACCESS_FINE_LOCATION,
+                                            Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                }
                             )
                         }
 
-                        item {
-                            SleekWeatherSection(
-                                viewModel = viewModel,
-                                modifier = Modifier.fillMaxWidth(),
-                                onChangeLocationClick = { showLocationSearchDialog = true },
-                                showExtendedData = true
-                            )
-                        }
-
-                        // Full AQI card lives on the WEATHER tab.
-                        airQuality?.let { aqi ->
+                        if (isWeatherEnabled) {
                             item {
-                                AirQualityCard(aqi = aqi, viewModel = viewModel)
+                                SleekWeatherSection(
+                                    viewModel = viewModel,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    onChangeLocationClick = { showLocationSearchDialog = true },
+                                    showExtendedData = true
+                                )
+                            }
+                            // Full AQI card lives on the WEATHER tab.
+                            airQuality?.let { aqi ->
+                                item {
+                                    AirQualityCard(aqi = aqi, viewModel = viewModel)
+                                }
                             }
                         }
+
                     }
                 }
 
@@ -829,7 +916,12 @@ fun DashboardScreen(
                             .fillMaxSize()
                             .padding(top = innerPadding.calculateTopPadding())
                     ) {
-                        SettingsScreen(viewModel = viewModel, onNavigateBack = { activeTab = 0 })
+                        SettingsScreen(
+                            viewModel = viewModel,
+                            onNavigateBack = { activeTab = 0 },
+                            onNavigateToPrivacyPolicy = onNavigateToPrivacyPolicy,
+                            onNavigateToTermsConditions = onNavigateToTermsConditions
+                        )
                     }
                 }
 
@@ -843,6 +935,7 @@ fun DashboardScreen(
                     }
                 }
             }
+        }
 
         }
     }
@@ -906,20 +999,6 @@ fun DashboardScreen(
     }
     }
 }
-
-/**
- * Returns a copy of this alarm with its stored timezone offset re-sanitised against its OWN
- * coordinates (e.g. a rounded India +5.0 corrected to +5.5). Used by the dashboard sun cards so the
- * displayed sunrise/sunset is correct SYNCHRONOUSLY at render time, with no 30-minutes-early flash
- * before the ViewModel's background DB heal lands. Only the offset is touched; every other field
- * (id, active, offsetMinutes, …) is preserved. Unbound alarms (no coordinates) are returned as-is.
- */
-private fun Alarm.withHealedTimezoneOffset(): Alarm =
-    if (hasLocation()) copy(
-        timezoneOffset = com.example.alarm.location.LocationHelper.sanitizeOffset(
-            latitude, longitude, timezoneOffset, locationName
-        )
-    ) else this
 
 @Composable
 fun SleekAlarmItemRow(
@@ -2474,6 +2553,117 @@ fun LocationCarouselSection(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun Stylized3DSunArcProgressionCard(
+    viewModel: AlarmViewModel,
+    alarms: List<Alarm>
+) {
+    val darkTheme = isSystemInDarkTheme()
+    val lat by viewModel.latitude.collectAsState()
+    val lng by viewModel.longitude.collectAsState()
+    val tzOffset by viewModel.timezoneOffset.collectAsState()
+    val locationName by viewModel.locationName.collectAsState()
+
+    val sunriseAlarm = alarms.find { it.alarmType == "SUNRISE" }
+    val sunsetAlarm = alarms.find { it.alarmType == "SUNSET" }
+    val today = java.time.LocalDate.now()
+    
+    val sunriseTimeLocalized = com.example.alarm.data.SunAlarmResolver.fireTimeOn(
+        sunriseAlarm ?: com.example.alarm.data.Alarm(title = "Sunrise", alarmType = "SUNRISE", hour = 6, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName),
+        today
+    )
+    val sunsetTimeLocalized = com.example.alarm.data.SunAlarmResolver.fireTimeOn(
+        sunsetAlarm ?: com.example.alarm.data.Alarm(title = "Sunset", alarmType = "SUNSET", hour = 18, minute = 0, latitude = lat, longitude = lng, timezoneOffset = tzOffset, locationName = locationName),
+        today
+    )
+
+    val activeAlarms = alarms.filter { it.active }.map { LocalTime.of(it.hour, it.minute) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(BorderStroke(0.5.dp, SleekBorder), shape = RoundedCornerShape(24.dp)),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = SleekCardBg)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.WbSunny,
+                    contentDescription = null,
+                    tint = SleekSolarAccent,
+                    modifier = Modifier.size(20.dp)
+                )
+                Column {
+                    Text(
+                        text = viewModel.translate("3D Solar Arc progression"),
+                        fontWeight = FontWeight.Bold,
+                        color = SleekActiveText,
+                        fontSize = 15.sp
+                    )
+                    Text(
+                        text = viewModel.translate("Progression with selected active alarm indicators"),
+                        color = SleekMutedText,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (darkTheme) Color(0xFF070A13) else Color(0xFFF1F5F9))
+            ) {
+                Sun3DProgressionView(
+                    modifier = Modifier.fillMaxSize(),
+                    sunriseTime = sunriseTimeLocalized,
+                    sunsetTime = sunsetTimeLocalized,
+                    currentTime = LocalTime.now(),
+                    alarmTimes = activeAlarms,
+                    isDark = darkTheme
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)
+            ) {
+                LegendItem(color = Color(0xFFF59E0B), text = viewModel.translate("Sunrise"))
+                LegendItem(color = Color(0xFFFA503C), text = viewModel.translate("Sunset"))
+                LegendItem(color = Color(0xFF1ECDC0), text = viewModel.translate("Alarms"))
+            }
+        }
+    }
+}
+
+@Composable
+fun LegendItem(color: Color, text: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .background(color, CircleShape)
+        )
+        Text(
+            text = text,
+            fontSize = 11.sp,
+            color = SleekMutedText,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 

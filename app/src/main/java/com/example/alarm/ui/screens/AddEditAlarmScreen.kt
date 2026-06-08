@@ -77,6 +77,8 @@ fun AddEditAlarmScreen(
     }
 
     val alarm = editingState ?: return
+    var isSaving by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     Scaffold(
         modifier = Modifier
@@ -122,8 +124,73 @@ fun AddEditAlarmScreen(
                     containerColor = Color.Transparent
                 )
             )
+        },
+        bottomBar = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+            ) {
+                // SAVE ACTION BUTTON WITH PREMIUM HORIZONTAL GRADIENT
+                Button(
+                    onClick = {
+                        val timeUntilTrigger = viewModel.calculateTimeUntilTrigger(alarm)
+                        if (timeUntilTrigger != null) {
+                            android.widget.Toast.makeText(context, "${viewModel.translate("Alarm will ring in")} $timeUntilTrigger", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                        isSaving = true
+                        viewModel.saveEditingAlarm()
+                        // Delay navigation to show animation
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            onNavigateBack()
+                        }, 1000)
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                        .shadow(12.dp, RoundedCornerShape(16.dp))
+                        .testTag("save_alarm_button")
+                        .clickable(enabled = !isSaving) { }, // Disable clicking if saving
+                    shape = RoundedCornerShape(16.dp),
+                    enabled = !isSaving,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                    contentPadding = PaddingValues(0.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Brush.horizontalGradient(listOf(SleekPrimary, SleekSecondary))),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(imageVector = Icons.Default.Check, contentDescription = viewModel.translate("Save"), tint = Color.White)
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = viewModel.translate("Confirm Schedule Settings"),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+            }
         }
     ) { innerPadding ->
+        if (isSaving) {
+            Box(Modifier.fillMaxSize().background(SleekBackground.copy(alpha = 0.8f)), contentAlignment = Alignment.Center) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = isSaving,
+                    enter = androidx.compose.animation.scaleIn() + androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.scaleOut() + androidx.compose.animation.fadeOut()
+                ) {
+                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = SleekPrimary, modifier = Modifier.size(64.dp))
+                }
+            }
+        }                
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -307,7 +374,7 @@ fun AddEditAlarmScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = viewModel.translate("Trigger exactly during event (Sunrise/Sunset)"),
+                                    text = viewModel.translate(if (alarm.alarmType == "SUNRISE") "Trigger exactly at Sunrise" else "Trigger exactly at Sunset"),
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 14.sp,
                                     color = SleekActiveText
@@ -353,7 +420,12 @@ fun AddEditAlarmScreen(
                                             if (selected) SleekPrimary else SleekBorder.copy(alpha = 0.5f)
                                         )
                                         .clickable {
-                                            viewModel.editingAlarm.value = alarm.copy(offsetMinutes = offset)
+                                            val wasExactChecked = alarm.ringAtExactAlso || alarm.offsetMinutes == 0
+                                            val newRingAtExactAlso = if (offset != 0 && wasExactChecked) true else alarm.ringAtExactAlso
+                                            viewModel.editingAlarm.value = alarm.copy(
+                                                offsetMinutes = offset,
+                                                ringAtExactAlso = newRingAtExactAlso
+                                            )
                                         }
                                         .border(
                                             BorderStroke(
@@ -629,9 +701,60 @@ fun AddEditAlarmScreen(
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = SleekCardBg)
             ) {
-                val context = androidx.compose.ui.platform.LocalContext.current
                 val ringtoneName = remember(alarm.ringtoneUri) {
                     getRingtoneName(context, alarm.ringtoneUri)
+                }
+                
+                val mediaPlayer = remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+                val playingUri = remember { mutableStateOf<String?>(null) }
+
+                DisposableEffect(Unit) {
+                    onDispose {
+                        mediaPlayer.value?.release()
+                        mediaPlayer.value = null
+                    }
+                }
+                
+                fun playPreview(uriString: String) {
+                    try {
+                        mediaPlayer.value?.release()
+                        val player = android.media.MediaPlayer()
+                        player.setAudioAttributes(
+                            android.media.AudioAttributes.Builder()
+                                .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                                .build()
+                        )
+                        if (uriString == "asset:Conch Sound.mp3") {
+                            val afd = context.assets.openFd("Conch Sound.mp3")
+                            player.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                            afd.close()
+                        } else {
+                            val uri = if (uriString.isEmpty()) android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM) else Uri.parse(uriString)
+                            player.setDataSource(context, uri)
+                        }
+                        player.prepare()
+                        player.start()
+                        player.setOnCompletionListener {
+                            playingUri.value = null
+                        }
+                        mediaPlayer.value = player
+                        playingUri.value = uriString
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        playingUri.value = null
+                    }
+                }
+
+                fun stopPreview() {
+                    try {
+                        mediaPlayer.value?.stop()
+                        mediaPlayer.value?.release()
+                        mediaPlayer.value = null
+                        playingUri.value = null
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
                 }
 
                 val ringtonePickerLauncher = rememberLauncherForActivityResult(
@@ -648,6 +771,70 @@ fun AddEditAlarmScreen(
                         }
                     }
                 )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            viewModel.editingAlarm.value = alarm.copy(ringtoneUri = "asset:Conch Sound.mp3")
+                        }
+                        .padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .background(SleekPrimary.copy(alpha = 0.15f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = null,
+                            tint = SleekPrimary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.width(16.dp))
+                    
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = viewModel.translate("Conch Sound"),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = SleekActiveText
+                        )
+                        Text(
+                            text = viewModel.translate("Premium Sound"),
+                            fontSize = 12.sp,
+                            color = SleekMutedText
+                        )
+                    }
+                    
+                    if (alarm.ringtoneUri == "asset:Conch Sound.mp3") {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Selected",
+                            tint = SleekPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    
+                    IconButton(
+                        onClick = { 
+                            if (playingUri.value == "asset:Conch Sound.mp3") stopPreview() 
+                            else playPreview("asset:Conch Sound.mp3") 
+                        }
+                    ) {
+                        Icon(
+                            imageVector = if (playingUri.value == "asset:Conch Sound.mp3") Icons.Default.Stop else Icons.Default.PlayArrow,
+                            contentDescription = "Preview Conch Sound",
+                            tint = SleekPrimary
+                        )
+                    }
+                }
+                
+                Divider(color = SleekBorder, thickness = 0.5.dp, modifier = Modifier.padding(horizontal = 20.dp))
 
                 Row(
                     modifier = Modifier
@@ -691,7 +878,84 @@ fun AddEditAlarmScreen(
                             color = SleekActiveText
                         )
                         Text(
-                            text = ringtoneName,
+                            text = if (alarm.ringtoneUri == "asset:Conch Sound.mp3") viewModel.translate("Default Alarm Sound") else ringtoneName,
+                            fontSize = 12.sp,
+                            color = SleekMutedText
+                        )
+                    }
+                    
+                    IconButton(
+                        onClick = { 
+                            if (playingUri.value == alarm.ringtoneUri && alarm.ringtoneUri != "asset:Conch Sound.mp3") stopPreview() 
+                            else playPreview(alarm.ringtoneUri) 
+                        }
+                    ) {
+                        Icon(
+                            imageVector = if (playingUri.value == alarm.ringtoneUri && alarm.ringtoneUri != "asset:Conch Sound.mp3") Icons.Default.Stop else Icons.Default.PlayArrow,
+                            contentDescription = "Preview Ringtone",
+                            tint = SleekPrimary
+                        )
+                    }
+                    
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowRight,
+                        contentDescription = "Select Ringtone",
+                        tint = SleekMutedText,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+                
+                Divider(color = SleekBorder, thickness = 0.5.dp, modifier = Modifier.padding(horizontal = 20.dp))
+                
+                val customAudioLauncher = rememberLauncherForActivityResult(
+                    contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+                    onResult = { uri ->
+                        uri?.let {
+                            try {
+                                context.contentResolver.takePersistableUriPermission(
+                                    it,
+                                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                                )
+                                viewModel.editingAlarm.value = alarm.copy(ringtoneUri = it.toString())
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                            }
+                        }
+                    }
+                )
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { customAudioLauncher.launch(arrayOf("audio/*")) }
+                        .padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .background(SleekPrimary.copy(alpha = 0.15f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = androidx.compose.material.icons.Icons.Default.AudioFile,
+                            contentDescription = null,
+                            tint = SleekPrimary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    
+                    Spacer(modifier = Modifier.width(16.dp))
+                    
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = viewModel.translate("Custom Audio File"),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = SleekActiveText
+                        )
+                        Text(
+                            text = viewModel.translate("Device storage / voice recording"),
                             fontSize = 12.sp,
                             color = SleekMutedText
                         )
@@ -699,7 +963,7 @@ fun AddEditAlarmScreen(
                     
                     Icon(
                         imageVector = Icons.Default.KeyboardArrowRight,
-                        contentDescription = "Select Ringtone",
+                        contentDescription = "Select Custom File",
                         tint = SleekMutedText,
                         modifier = Modifier.size(22.dp)
                     )
@@ -816,49 +1080,46 @@ fun AddEditAlarmScreen(
                             )
                         )
                     }
-                }
-            }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            val context = androidx.compose.ui.platform.LocalContext.current
-            
-            // 6. SAVE ACTION BUTTON WITH PREMIUM HORIZONTAL GRADIENT
-            Button(
-                onClick = {
-                    val timeUntilTrigger = viewModel.calculateTimeUntilTrigger(alarm)
-                    if (timeUntilTrigger != null) {
-                        android.widget.Toast.makeText(context, "${viewModel.translate("Alarm will ring in")} $timeUntilTrigger", android.widget.Toast.LENGTH_LONG).show()
-                    }
-                    viewModel.saveEditingAlarm()
-                    onNavigateBack()
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .shadow(12.dp, RoundedCornerShape(16.dp))
-                    .testTag("save_alarm_button"),
-                shape = RoundedCornerShape(16.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
-                contentPadding = PaddingValues(0.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(Brush.horizontalGradient(listOf(SleekPrimary, SleekSecondary))),
-                    contentAlignment = Alignment.Center
-                ) {
+                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(SleekBorder.copy(alpha = 0.5f)))
+                    
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(imageVector = Icons.Default.Check, contentDescription = viewModel.translate("Save"), tint = Color.White)
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Text(
-                            text = viewModel.translate("Confirm Schedule Settings"),
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(viewModel.translate("Smart Wake Window"), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = SleekActiveText)
+                            Text(viewModel.translate("Wake up gently within: ") + "${alarm.smartWakeWindowMinutes} " + viewModel.translate("mins"), fontSize = 12.sp, color = SleekMutedText)
+                        }
+                        Switch(
+                            checked = alarm.smartWakeEnabled,
+                            onCheckedChange = { v ->
+                                viewModel.editingAlarm.value = alarm.copy(smartWakeEnabled = v)
+                            },
+                            modifier = Modifier.testTag("smart_wake_switch"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = SleekSolarAccent,
+                                uncheckedThumbColor = Color.Gray,
+                                uncheckedTrackColor = SleekBorder
+                            )
+                        )
+                    }
+                    
+                    if (alarm.smartWakeEnabled) {
+                        Slider(
+                            value = alarm.smartWakeWindowMinutes.toFloat(),
+                            onValueChange = { value ->
+                                viewModel.editingAlarm.value = alarm.copy(smartWakeWindowMinutes = value.toInt())
+                            },
+                            valueRange = 5f..60f,
+                            steps = 11, // 5 minute steps
+                            modifier = Modifier.testTag("smart_wake_slider"),
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = SleekSolarAccent,
+                                inactiveTrackColor = SleekBorder
+                            )
                         )
                     }
                 }
@@ -954,6 +1215,7 @@ fun MiStyleTimeWheelSelector(
 data class Quad<T1, T2, T3, T4>(val first: T1, val second: T2, val third: T3, val fourth: T4)
 
 fun getRingtoneName(context: Context, uriString: String): String {
+    if (uriString == "asset:Conch Sound.mp3") return "Conch Sound"
     if (uriString.isEmpty()) return "Default Alarm Sound"
     return try {
         val uri = Uri.parse(uriString)

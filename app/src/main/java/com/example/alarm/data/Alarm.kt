@@ -31,6 +31,8 @@ data class Alarm(
     val longitude: Double = 0.0,
     val timezoneOffset: Double = 0.0,
     val locationName: String = "",
+    val smartWakeEnabled: Boolean = false,
+    val smartWakeWindowMinutes: Int = 30,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {

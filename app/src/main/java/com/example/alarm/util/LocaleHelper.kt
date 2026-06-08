@@ -73,6 +73,19 @@ object LocaleHelper {
         // Guarantee English + Hindi (the fully-translated languages) first.
         add(Locale.ENGLISH)
         add(Locale("hi"))
+        // Additional widely-spoken languages for UI selection
+        add(Locale("es")) // Spanish
+        add(Locale("fr")) // French
+        add(Locale("de")) // German
+        add(Locale("pt")) // Portuguese
+        add(Locale("it")) // Italian
+        add(Locale("ru")) // Russian
+        add(Locale("zh")) // Chinese
+        add(Locale("ja")) // Japanese
+        add(Locale("ko")) // Korean
+        add(Locale("ar")) // Arabic
+        add(Locale("bn")) // Bengali
+        add(Locale("pa")) // Punjabi
 
         // Then every language the user has added to their phone.
         val sys: LocaleListCompat = LocaleManagerCompat.getSystemLocales(context)

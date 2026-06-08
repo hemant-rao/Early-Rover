@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +31,7 @@ import com.example.ui.theme.SleekPrimary
 import com.example.ui.theme.SleekSecondary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.drop
+import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.launch
 
 @Composable
@@ -42,8 +44,37 @@ fun LocationHeader(
     headerScope: CoroutineScope,
     viewModel: AlarmViewModel,
     onAddLocationClick: () -> Unit,
-    onManageCitiesClick: () -> Unit
+    onManageCitiesClick: () -> Unit,
+    hasLocationPermission: Boolean,
+    onRequestLocationPermission: () -> Unit
 ) {
+    if (!hasLocationPermission) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,                
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onRequestLocationPermission() }
+                .padding(vertical = 4.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = "Location Needed",
+                tint = Color(0xFFEF4444),
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = "Location access needed - Tap to enable",                
+                style = MaterialTheme.typography.titleMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFEF4444)
+                ),
+                modifier = Modifier.weight(1f)
+            )
+        }
+        return
+    }
+
     if (isDetecting) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.LocationOn, null, tint = SleekSecondary, modifier = Modifier.size(16.dp))

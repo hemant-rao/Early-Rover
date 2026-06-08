@@ -140,7 +140,7 @@ class AlarmService : Service() {
             ServiceCompat.startForeground(
                 this,
                 notificationId,
-                buildForegroundNotification(alarmId, alarmTitle, alarmType, snoozeEnabled, isExactAlso),
+                buildForegroundNotification(this, alarmId, alarmTitle, null, snoozeEnabled, isExactAlso),
                 serviceType
             )
         } catch (e: Exception) {
@@ -151,7 +151,7 @@ class AlarmService : Service() {
             // (already acquired above) keeps the CPU alive long enough for the fallback audio to be heard.
             acquireWakeLock()
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                .notify(notificationId, buildForegroundNotification(alarmId, alarmTitle, alarmType, snoozeEnabled, isExactAlso))
+                .notify(notificationId, buildForegroundNotification(this, alarmId, alarmTitle, null, snoozeEnabled, isExactAlso))
             // Bound the orphan: as a plain (killable) background service onDestroy() may never run, so a
             // ring with no user interaction could leak the MediaPlayer/vibrator/wakelock indefinitely.
             // Schedule a deterministic self-stop that releases this ring's resources after the ring window.
@@ -178,7 +178,7 @@ class AlarmService : Service() {
                             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
                                 .notify(
                                     notificationId,
-                                    buildForegroundNotification(alarmId, alarmTitle, alarmType, snoozeEnabled = false, isExactAlso = isExactAlso)
+                                    buildForegroundNotification(this@AlarmService, alarmId, alarmTitle, alarmObj, snoozeEnabled = false, isExactAlso = isExactAlso)
                                 )
                         } catch (e: Exception) {
                             Log.e("AlarmService", "Failed to update notification without snooze action", e)
@@ -228,7 +228,13 @@ class AlarmService : Service() {
             // start cannot orphan a still-looping MediaPlayer.
             releasePlayer(notificationId)
             val player = MediaPlayer().apply {
-                setDataSource(this@AlarmService, alarmUri!!)
+                if (ringtoneUriString == "asset:Conch Sound.mp3") {
+                    val afd = assets.openFd("Conch Sound.mp3")
+                    setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    afd.close()
+                } else {
+                    setDataSource(this@AlarmService, alarmUri!!)
+                }
                 setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_ALARM)
@@ -241,7 +247,23 @@ class AlarmService : Service() {
             }
             if (stopRequestedIds.contains(notificationId)) { player.release(); return }
             mediaPlayers[notificationId] = player
-            player.start()
+            
+            // Fade-in logic (30 seconds)
+            serviceScope.launch {
+                player.setVolume(0f, 0f)
+                player.start()
+                val fadeDurationMs = 30000L
+                val steps = 30
+                val intervalMs = fadeDurationMs / steps
+                for (i in 1..steps) {
+                    if (stopRequestedIds.contains(notificationId) || !player.isPlaying) break
+                    val volume = (i.toFloat() / steps) * v
+                    try {
+                        player.setVolume(volume, volume)
+                    } catch (e: Exception) { break }
+                    kotlinx.coroutines.delay(intervalMs)
+                }
+            }
         } catch (e: Exception) {
             Log.e("AlarmService", "Failed to play custom alarm ringtone, trying fallback", e)
             try {
@@ -257,20 +279,32 @@ class AlarmService : Service() {
                             .build()
                     )
                     isLooping = true
-                    setVolume(v, v)
                     prepare()
                 }
                 if (stopRequestedIds.contains(notificationId)) { player.release(); return }
                 mediaPlayers[notificationId] = player
-                player.start()
+
+                // Fade-in logic (30 seconds)
+                serviceScope.launch {
+                    player.setVolume(0f, 0f)
+                    player.start()
+                    val fadeDurationMs = 30000L
+                    val steps = 30
+                    val intervalMs = fadeDurationMs / steps
+                    for (i in 1..steps) {
+                        if (stopRequestedIds.contains(notificationId) || !player.isPlaying) break
+                        val volume = (i.toFloat() / steps) * v
+                        try {
+                            player.setVolume(volume, volume)
+                        } catch (e: Exception) { break }
+                        kotlinx.coroutines.delay(intervalMs)
+                    }
+                }
             } catch (e2: Exception) {
                 Log.e("AlarmService", "Fallback system default ringtone failed: ", e2)
                 try {
                     val notifUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
                         ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                    // Use an explicit MediaPlayer with USAGE_ALARM AudioAttributes instead of
-                    // MediaPlayer.create (which defaults to USAGE_MEDIA) so this last-ditch fallback still
-                    // routes through the alarm stream and is not suppressed by DND/silent mode.
                     releasePlayer(notificationId)
                     val player = MediaPlayer().apply {
                         setDataSource(this@AlarmService, notifUri!!)
@@ -281,12 +315,27 @@ class AlarmService : Service() {
                                 .build()
                         )
                         isLooping = true
-                        setVolume(v, v)
                         prepare()
                     }
                     if (stopRequestedIds.contains(notificationId)) { player.release(); return }
                     mediaPlayers[notificationId] = player
-                    player.start()
+
+                    // Fade-in logic (30 seconds)
+                    serviceScope.launch {
+                        player.setVolume(0f, 0f)
+                        player.start()
+                        val fadeDurationMs = 30000L
+                        val steps = 30
+                        val intervalMs = fadeDurationMs / steps
+                        for (i in 1..steps) {
+                            if (stopRequestedIds.contains(notificationId) || !player.isPlaying) break
+                            val volume = (i.toFloat() / steps) * v
+                            try {
+                                player.setVolume(volume, volume)
+                            } catch (e: Exception) { break }
+                            kotlinx.coroutines.delay(intervalMs)
+                        }
+                    }
                 } catch (e3: Exception) {
                     Log.e("AlarmService", "Fallback notification sound failed, alarm muted!", e3)
                 }
@@ -303,7 +352,16 @@ class AlarmService : Service() {
     }
 
     private fun startVibration() {
-        val pattern = longArrayOf(0, 1000, 1000) // vibrate, pause, vibrate
+        val prefs = applicationContext.getSharedPreferences("sun_alarm_settings_prefs", Context.MODE_PRIVATE)
+        val selectedPattern = prefs.getString("active_vibration_pattern", "Steady") ?: "Steady"
+        
+        val pattern = when (selectedPattern) {
+            "Heartbeat" -> longArrayOf(0, 150, 150, 150, 600)
+            "Siren" -> longArrayOf(0, 400, 200, 400, 200)
+            "Quick Pulses" -> longArrayOf(0, 80, 80, 80, 80, 80, 80, 400)
+            else -> longArrayOf(0, 1000, 1000) // Steady
+        }
+        
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 vibrator?.vibrate(VibrationEffect.createWaveform(pattern, 0))
@@ -312,7 +370,7 @@ class AlarmService : Service() {
                 vibrator?.vibrate(pattern, 0)
             }
         } catch (e: Exception) {
-            Log.e("AlarmService", "Failed to start vibration provider", e)
+            Log.e("AlarmService", "Failed to start vibration provider with pattern $selectedPattern", e)
         }
     }
 
@@ -455,12 +513,12 @@ class AlarmService : Service() {
         }
     }
 
-    private fun buildForegroundNotification(alarmId: Int, title: String, type: String, snoozeEnabled: Boolean = true, isExactAlso: Boolean = false): Notification {
+    private fun buildForegroundNotification(context: Context, alarmId: Int, title: String, alarm: Alarm?, snoozeEnabled: Boolean = true, isExactAlso: Boolean = false): Notification {
         // Bias request codes for the exact dual-ring companion so its PendingIntents don't collide with
         // the offset ring's, keeping the two notifications independently dismissable/snoozable.
         val rcBias = if (isExactAlso) 50000 else 0
         val alarmActivityClass = try {
-            Class.forName("com.example.alarm.ui.AlarmActivity")
+            Class.forName("com.example.MainActivity")
         } catch (e: Exception) {
             null
         }
@@ -470,11 +528,12 @@ class AlarmService : Service() {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
                 putExtra("RINGING_ALARM_ID", alarmId)
                 putExtra("RINGING_ALARM_TITLE", title)
-                putExtra("RINGING_ALARM_TYPE", type)
+                putExtra("RINGING_ALARM_TYPE", alarm?.alarmType ?: "CUSTOM")
                 // Thread the snooze flag into the full-screen ring so its UI matches the notification:
                 // a snooze-disabled alarm must NOT show a Snooze button (tapping it would be a silent
                 // no-op, since AlarmService.snoozeAlarm defensively rejects a disabled-snooze alarm).
                 putExtra("RINGING_ALARM_SNOOZE_ENABLED", snoozeEnabled)
+                putExtra("RINGING_ALARM_IS_EXACT_ALSO", isExactAlso)
             }
         } else null
 
@@ -487,7 +546,7 @@ class AlarmService : Service() {
             action = "ACTION_DISMISS"
             putExtra("ALARM_ID", alarmId)
             putExtra("ALARM_TITLE", title)
-            putExtra("ALARM_TYPE", type)
+            putExtra("ALARM_TYPE", alarm?.alarmType ?: "CUSTOM")
             putExtra("IS_EXACT_ALSO", isExactAlso)
         }
         val dismissPendingIntent = PendingIntent.getService(this, alarmId + 300 + rcBias, dismissIntent, pendingFlags)
@@ -498,16 +557,17 @@ class AlarmService : Service() {
                 putExtra("ALARM_ID", alarmId)
                 // Carry title/type so a notification-button snooze keeps the real name & SUNRISE/SUNSET type.
                 putExtra("ALARM_TITLE", title)
-                putExtra("ALARM_TYPE", type)
+                putExtra("ALARM_TYPE", alarm?.alarmType ?: "CUSTOM")
                 putExtra("IS_EXACT_ALSO", isExactAlso)
             }
             PendingIntent.getService(this, alarmId + 400 + rcBias, snoozeIntent, pendingFlags)
         } else null
 
-        val alarmDescription = when (type) {
-            "SUNRISE" -> "Solar Sunrise Alert"
-            "SUNSET" -> "Solar Sunset Alert"
-            else -> "Standard Time Alarm"
+        val timeString = alarm?.let { "%02d:%02d".format(it.hour, it.minute) } ?: ""
+        val alarmDescription = when (alarm?.alarmType) {
+            "SUNRISE" -> "Solar Sunrise Alert ($timeString)"
+            "SUNSET" -> "Solar Sunset Alert ($timeString)"
+            else -> "Standard Time Alarm ($timeString)"
         }
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)

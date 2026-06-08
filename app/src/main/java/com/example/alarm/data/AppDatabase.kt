@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [Alarm::class, TravelAlarm::class], version = 7, exportSchema = false)
+@Database(entities = [Alarm::class, TravelAlarm::class], version = 8, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun alarmDao(): AlarmDao
     abstract fun travelAlarmDao(): TravelAlarmDao
@@ -98,6 +98,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `alarms` ADD COLUMN `smartWakeEnabled` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `alarms` ADD COLUMN `smartWakeWindowMinutes` INTEGER NOT NULL DEFAULT 30")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -105,7 +112,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "sun_alarm_database"
                 )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                 // Only tolerate destructive recreation on an unmapped DOWNGRADE (e.g. older-APK
                 // rollback). Unmapped UPGRADES intentionally throw so a missing migration is caught
                 // in testing rather than silently wiping every alarm in production.

@@ -74,12 +74,13 @@ fun ManageCitiesScreen(
                             Text(city.name, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                             Text(city.country, fontSize = 12.sp, color = SleekMutedText)
                         }
-                        if (isCurrentLocation) {
-                            Text("Current", fontSize = 12.sp, color = SleekPrimary)
-                        } else {
+                        // Always allow delete if there is more than 1 city and it's not the first city (default)
+                        if (savedCities.size > 1 && index != 0) {
                             IconButton(onClick = { viewModel.deleteSavedCity(city) }) {
                                 Icon(Icons.Default.Delete, contentDescription = "Delete City", tint = MaterialTheme.colorScheme.error)
                             }
+                        } else if (isCurrentLocation) {
+                            Text("Current", fontSize = 12.sp, color = SleekPrimary)
                         }
                     }
                 }

@@ -121,7 +121,7 @@ class MainActivity : ComponentActivity() {
                     java.time.LocalTime.now().hour in 6..17
                 }
             }
-            val darkTheme = viewModel.isEffectiveDark(isDayAtLocation)
+            val darkTheme = viewModel.isEffectiveDark(themeMode, isDayAtLocation)
             val switching by viewModel.isSwitchingLanguage.collectAsState()
 
             // Request location permissions at startup
@@ -240,7 +240,9 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onNavigateToManageCities = {
                                     navController.navigate("manage_cities")
-                                }
+                                },
+                                onNavigateToPrivacyPolicy = { navController.navigate("privacy_policy") },
+                                onNavigateToTermsConditions = { navController.navigate("terms_conditions") }
                             )
                         }
 
@@ -286,8 +288,17 @@ class MainActivity : ComponentActivity() {
                         composable("settings") {
                             SettingsScreen(
                                 viewModel = viewModel,
-                                onNavigateBack = { navController.navigateUp() }
+                                onNavigateBack = { navController.navigateUp() },
+                                onNavigateToPrivacyPolicy = { navController.navigate("privacy_policy") },
+                                onNavigateToTermsConditions = { navController.navigate("terms_conditions") }
                             )
+                        }
+
+                        composable("privacy_policy") {
+                            PrivacyPolicyScreen(onNavigateBack = { navController.navigateUp() })
+                        }
+                        composable("terms_conditions") {
+                            TermsConditionsScreen(onNavigateBack = { navController.navigateUp() })
                         }
                     }
                 }
@@ -346,7 +357,8 @@ class MainActivity : ComponentActivity() {
             // Carry the alarm's snooze flag so the full-screen ring matches the notification: a
             // snooze-disabled alarm must not show a Snooze button (tapping it would silently no-op).
             val snoozeEnabled = intent.getBooleanExtra("RINGING_ALARM_SNOOZE_ENABLED", true)
-            model.setRingingState(id, title, type, snoozeEnabled)
+            val isExactAlso = intent.getBooleanExtra("RINGING_ALARM_IS_EXACT_ALSO", false)
+            model.setRingingState(id, title, type, snoozeEnabled, isExactAlso)
 
             // Remember this was an alarm launch so dismissing the ring screen on a cold
             // start lands on the dashboard instead of replaying the splash animation.

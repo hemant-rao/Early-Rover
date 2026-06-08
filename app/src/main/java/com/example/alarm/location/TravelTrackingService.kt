@@ -72,6 +72,7 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
     // Ids of alarms that have already fired this session, so a single arrival doesn't
     // re-trigger on every 3-6s location update while still inside the radius.
     private val triggeredAlarmIds = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
+    private var lastProcessedLocation: Location? = null
 
     companion object {
         private const val TAG = "TravelTrackingService"
@@ -256,7 +257,8 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
                 
                 // Convert m/s speed to km/h speed safely
                 val speedKmh = location.speed * 3.6
-                _currentSpeedKmh.value = if (speedKmh.isNaN()) 0.0 else speedKmh
+                val filteredSpeed = if (speedKmh < 3.0) 0.0 else speedKmh
+                _currentSpeedKmh.value = if (filteredSpeed.isNaN()) 0.0 else filteredSpeed
 
                 serviceScope.launch(Dispatchers.IO) {
                     processLocationUpdate(location)
@@ -330,27 +332,20 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
             _nearestAlarm.value = closestAlarm
             _distanceToNearestKm.value = minDistance
 
-            // Update total trip distance from start location to the nearest waypoint
-            val startLoc = _startLocation.value
-            val customStartLat = closestAlarm?.startLatitude
-            val customStartLng = closestAlarm?.startLongitude
-            if (customStartLat != null && customStartLng != null && closestAlarm != null) {
-                _totalTripDistanceKm.value = calculateDistanceInKm(
-                    customStartLat,
-                    customStartLng,
-                    closestAlarm.latitude,
-                    closestAlarm.longitude
+            // Update total trip distance: accumulate movement segment by segment
+            if (lastProcessedLocation != null) {
+                val segmentDistance = calculateDistanceInKm(
+                    lastProcessedLocation!!.latitude,
+                    lastProcessedLocation!!.longitude,
+                    location.latitude,
+                    location.longitude
                 )
-            } else if (startLoc != null && closestAlarm != null) {
-                _totalTripDistanceKm.value = calculateDistanceInKm(
-                    startLoc.latitude,
-                    startLoc.longitude,
-                    closestAlarm.latitude,
-                    closestAlarm.longitude
-                )
-            } else {
-                _totalTripDistanceKm.value = 0.0
+                // Filter out likely GPS noise (very small movements or impossible jumps)
+                if (segmentDistance > 0.005) { // Only count movements > 5 meters
+                    _totalTripDistanceKm.value += segmentDistance
+                }
             }
+            lastProcessedLocation = location
 
             val label = closestAlarm?.label ?: "Destination"
             val distFormatted = String.format(Locale.US, "%.2f km", minDistance)
@@ -712,6 +707,7 @@ class TravelTrackingService : Service(), TextToSpeech.OnInitListener {
             _currentLocation.value = null
             _currentSpeedKmh.value = 0.0
             triggeredAlarmIds.clear()
+            lastProcessedLocation = null
         } catch (e: Exception) {
             Log.e(TAG, "Failed resetting start location flows", e)
         }

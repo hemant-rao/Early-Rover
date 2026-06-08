@@ -33,6 +33,10 @@ class AlarmRepository(
         travelAlarmDao.deleteTravelAlarmById(id)
     }
 
+    suspend fun deleteAllTravelAlarms() {
+        travelAlarmDao.deleteAllTravelAlarms()
+    }
+
     suspend fun getAlarmById(id: Int): Alarm? {
         return alarmDao.getAlarmById(id)
     }
@@ -55,5 +59,9 @@ class AlarmRepository(
 
     suspend fun deleteAlarmById(id: Int) {
         alarmDao.deleteAlarmById(id)
+    }
+
+    suspend fun deleteAllAlarms() {
+        alarmDao.deleteAllAlarms()
     }
 }

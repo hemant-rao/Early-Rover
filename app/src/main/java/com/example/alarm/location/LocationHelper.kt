@@ -457,16 +457,18 @@ class LocationHelper(private val context: Context) {
                     val addresses = geocoder.getFromLocation(lat, lng, 1)
                     if (!addresses.isNullOrEmpty()) {
                         val address = addresses[0]
-                        val city = address.locality ?: address.subAdminArea ?: address.adminArea ?: address.thoroughfare ?: ""
+                        val placeName = address.featureName
+                        val locality = address.locality ?: address.subAdminArea ?: address.adminArea ?: ""
+                        
                         detectedCountry = address.countryCode ?: address.countryName ?: ""
-                        detectedName = if (city.isNotEmpty() && detectedCountry.isNotEmpty()) {
-                            "$city, $detectedCountry"
-                        } else if (city.isNotEmpty()) {
-                            city
-                        } else if (address.countryName != null) {
-                            address.countryName
+                        
+                        detectedName = if (!placeName.isNullOrEmpty() && placeName != locality && !placeName.matches(Regex("^[0-9]+$"))) {
+                            // Place name exists and is not just a house number
+                            if (locality.isNotEmpty()) "$placeName, $locality" else placeName
+                        } else if (locality.isNotEmpty()) {
+                            if (detectedCountry.isNotEmpty()) "$locality, $detectedCountry" else locality
                         } else {
-                            ""
+                            detectedCountry
                         }
                     }
                 }
@@ -497,6 +499,16 @@ class LocationHelper(private val context: Context) {
                         val jsonObject = JSONObject(response.toString())
                         if (jsonObject.has("address")) {
                             val addrObj = jsonObject.getJSONObject("address")
+                            // Try to find a very specific place name first (POI/Building/Amenity)
+                            val placeName = addrObj.optString("amenity", "")
+                                .ifEmpty { addrObj.optString("building", "") }
+                                .ifEmpty { addrObj.optString("shop", "") }
+                                .ifEmpty { addrObj.optString("historic", "") }
+                                .ifEmpty { addrObj.optString("tourism", "") }
+                                .ifEmpty { addrObj.optString("office", "") }
+                                .ifEmpty { addrObj.optString("leisure", "") }
+                                .ifEmpty { addrObj.optString("place_of_worship", "") }
+
                             val city = addrObj.optString("city", "")
                                 .ifEmpty { addrObj.optString("town", "") }
                                 .ifEmpty { addrObj.optString("village", "") }
@@ -507,7 +519,9 @@ class LocationHelper(private val context: Context) {
                                 addrObj.optString("country", "")
                             }
                             
-                            detectedName = if (city.isNotEmpty() && detectedCountry.isNotEmpty()) {
+                            detectedName = if (placeName.isNotEmpty()) {
+                                if (city.isNotEmpty()) "$placeName, $city" else placeName
+                            } else if (city.isNotEmpty() && detectedCountry.isNotEmpty()) {
                                 "$city, $detectedCountry"
                             } else if (city.isNotEmpty()) {
                                 city
@@ -680,7 +694,7 @@ class LocationHelper(private val context: Context) {
         // 1. Online lookup via 100% free Open-Meteo Geocoding API with no API Key
         try {
             val encodedQuery = URLEncoder.encode(trimQuery, "UTF-8")
-            val url = URL("https://geocoding-api.open-meteo.com/v1/search?name=$encodedQuery&count=10&language=en")
+            val url = URL("https://geocoding-api.open-meteo.com/v1/search?name=$encodedQuery&count=20&language=en")
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 4000
@@ -731,7 +745,7 @@ class LocationHelper(private val context: Context) {
         // 2. Fallback Online lookup via 100% free OpenStreetMap Nominatim API (Keyless)
         try {
             val encodedQuery = URLEncoder.encode(trimQuery, "UTF-8")
-            val url = URL("https://nominatim.openstreetmap.org/search?q=$encodedQuery&format=json&limit=10&accept-language=en")
+            val url = URL("https://nominatim.openstreetmap.org/search?q=$encodedQuery&format=json&limit=50&addressdetails=1&namedetails=1&accept-language=en")
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 4000

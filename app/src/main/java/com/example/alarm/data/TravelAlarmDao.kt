@@ -25,4 +25,7 @@ interface TravelAlarmDao {
 
     @Query("DELETE FROM travel_alarms WHERE id = :id")
     suspend fun deleteTravelAlarmById(id: Int)
+
+    @Query("DELETE FROM travel_alarms")
+    suspend fun deleteAllTravelAlarms()
 }
