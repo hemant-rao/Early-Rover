@@ -88,6 +88,13 @@ fun TravelAlarmScreen(
     var editingActive by remember { mutableStateOf(true) }
     val isHindi = viewModel.currentLanguage.collectAsStateWithLifecycle().value == "hi"
 
+    // Ola Maps key (admin-configured). When present, place search uses Ola autocomplete and the
+    // interactive map renders; when blank we transparently fall back to the existing city search.
+    val olaApiKey by viewModel.olaMapsApiKey.collectAsStateWithLifecycle()
+
+    // Decoded route (FROM -> TO) for the map, fetched from Ola Directions.
+    var routePoints by remember { mutableStateOf<List<com.example.alarm.maps.GeoPoint>?>(null) }
+
     // Waypoint properties (TO)
     var waypointLabel by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("STATION") }
@@ -168,8 +175,12 @@ fun TravelAlarmScreen(
             try {
                 kotlinx.coroutines.delay(500) // debounce
                 val results = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    val locator = com.example.alarm.location.LocationHelper(context)
-                    locator.searchCity(query)
+                    val bias = currentLocation?.let { com.example.alarm.maps.GeoPoint(it.latitude, it.longitude) }
+                    val ola = if (olaApiKey.isNotBlank())
+                        com.example.alarm.maps.OlaMapsRepository.searchPlaces(query, olaApiKey, bias)
+                    else emptyList()
+                    if (ola.isNotEmpty()) ola
+                    else com.example.alarm.location.LocationHelper(context).searchCity(query)
                 }
                 searchResults = results
                 isSearchingNominatim = false
@@ -190,8 +201,12 @@ fun TravelAlarmScreen(
             try {
                 kotlinx.coroutines.delay(500) // debounce
                 val results = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    val locator = com.example.alarm.location.LocationHelper(context)
-                    locator.searchCity(query)
+                    val bias = currentLocation?.let { com.example.alarm.maps.GeoPoint(it.latitude, it.longitude) }
+                    val ola = if (olaApiKey.isNotBlank())
+                        com.example.alarm.maps.OlaMapsRepository.searchPlaces(query, olaApiKey, bias)
+                    else emptyList()
+                    if (ola.isNotEmpty()) ola
+                    else com.example.alarm.location.LocationHelper(context).searchCity(query)
                 }
                 searchResultsStart = results
                 isSearchingNominatimStart = false
@@ -201,6 +216,23 @@ fun TravelAlarmScreen(
                 isSearchingNominatimStart = false
             }
         }
+    }
+
+    // Map points derived from live tracking + saved destinations.
+    val mapCurrent = currentLocation?.let { com.example.alarm.maps.GeoPoint(it.latitude, it.longitude) }
+    val mapFrom = startLocation?.let { com.example.alarm.maps.GeoPoint(it.latitude, it.longitude) }
+    val mapTo = remember(nearestAlarm, travelAlarms) {
+        (nearestAlarm ?: travelAlarms.firstOrNull { it.active })?.let {
+            com.example.alarm.maps.GeoPoint(it.latitude, it.longitude)
+        }
+    }
+    // Route origin: the start fix when tracking, else the device's current position.
+    val routeFrom = mapFrom ?: mapCurrent
+    LaunchedEffect(routeFrom, mapTo, olaApiKey) {
+        val f = routeFrom; val t = mapTo
+        routePoints = if (f != null && t != null && olaApiKey.isNotBlank()) {
+            com.example.alarm.maps.OlaMapsRepository.route(f, t, olaApiKey)?.points
+        } else null
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -550,6 +582,82 @@ fun TravelAlarmScreen(
                                 text = if (isTracking) t("STOP TRACKING", "ट्रैकिंग बंद करें") else t("START TRACKING", "ट्रैकिंग शुरू करें"),
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Live interactive Ola map (current + FROM/TO markers + route, all together).
+            item {
+                if (olaApiKey.isNotBlank()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth().shadow(8.dp, RoundedCornerShape(24.dp)),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = SleekCardBg.copy(alpha = 0.55f)),
+                        border = BorderStroke(0.5.dp, SleekBorder)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(imageVector = Icons.Default.Map, contentDescription = null, tint = SleekPrimary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = t("LIVE MAP", "लाइव मैप"),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = SleekSecondary,
+                                    letterSpacing = 1.sp
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(300.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                            ) {
+                                com.example.alarm.maps.OlaMapView(
+                                    apiKey = olaApiKey,
+                                    modifier = Modifier.fillMaxSize(),
+                                    current = mapCurrent,
+                                    from = mapFrom,
+                                    to = mapTo,
+                                    route = routePoints,
+                                    followCurrent = isTracking
+                                )
+                            }
+                            Text(
+                                text = t(
+                                    "🟢 Start   🔵 You (live)   🟣 Destination",
+                                    "🟢 प्रस्थान   🔵 आप (लाइव)   🟣 गंतव्य"
+                                ),
+                                fontSize = 9.sp,
+                                color = SleekMutedText,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                } else {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(containerColor = SleekCardBg.copy(alpha = 0.4f)),
+                        border = BorderStroke(0.5.dp, SleekBorder)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(imageVector = Icons.Default.Map, contentDescription = null, tint = SleekMutedText, modifier = Modifier.size(22.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = t(
+                                    "Add your Ola Maps API key in Settings → Advanced to unlock the live map, route & smart search.",
+                                    "लाइव मैप, रूट और स्मार्ट सर्च के लिए Settings → Advanced में अपनी Ola Maps API key जोड़ें।"
+                                ),
+                                fontSize = 11.sp,
+                                color = SleekMutedText,
+                                lineHeight = 15.sp
                             )
                         }
                     }
