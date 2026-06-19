@@ -183,18 +183,6 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLocationEnabled = MutableStateFlow(settingsPrefs.getBoolean(FEATURE_LOCATION, true))
     val isLocationEnabled: StateFlow<Boolean> = _isLocationEnabled.asStateFlow()
 
-    // Ola Maps API key — admin-configurable (Settings > Advanced), stored alongside other
-    // settings so the map / Places / Directions stay fully dynamic (no hardcoded key).
-    private val OLA_MAPS_API_KEY = "ola_maps_api_key"
-    private val _olaMapsApiKey = MutableStateFlow(settingsPrefs.getString(OLA_MAPS_API_KEY, "") ?: "")
-    val olaMapsApiKey: StateFlow<String> = _olaMapsApiKey.asStateFlow()
-
-    fun setOlaMapsApiKey(key: String) {
-        val trimmed = key.trim()
-        _olaMapsApiKey.value = trimmed
-        settingsPrefs.edit().putString(OLA_MAPS_API_KEY, trimmed).apply()
-    }
-
     fun setFeatureEnabled(key: String, enabled: Boolean) {
         when(key) {
             FEATURE_WEATHER -> {
