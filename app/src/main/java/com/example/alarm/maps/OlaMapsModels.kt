@@ -4,103 +4,96 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 
 /**
- * Lightweight lat/lng pair used across the Ola Maps layer so the repository / DTOs do
+ * §689 — DTOs for the OdioBook GEO gateway (NOT Ola's raw shapes).
+ *
+ * The app no longer talks to api.olamaps.io directly; it calls the OdioBook
+ * backend at {server}/api/geo/*, which proxies Ola with the admin-managed REST
+ * key (server-side only) and returns these STABLE normalised envelopes. The only
+ * Ola credential on-device is the restricted *tile* key, delivered via
+ * [GeoAppConfigDto.tileKey] and used solely to render map tiles.
+ */
+
+/**
+ * Lightweight lat/lng pair used across the maps layer so the repository / DTOs do
  * not depend on MapLibre types (OlaMapView converts these to MapLibre LatLng).
  */
 data class GeoPoint(val latitude: Double, val longitude: Double)
 
 // ---------------------------------------------------------------------------
-// Places Autocomplete  ->  GET /places/v1/autocomplete
+// Remote config  ->  GET /api/geo/app-config?app=solaris
 // ---------------------------------------------------------------------------
 
 @JsonClass(generateAdapter = true)
-data class OlaAutocompleteResponse(
-    @Json(name = "predictions") val predictions: List<OlaPrediction> = emptyList(),
-    @Json(name = "status") val status: String? = null
+data class GeoAppConfigDto(
+    @Json(name = "app") val app: String? = null,
+    @Json(name = "enabled") val enabled: Boolean = false,
+    @Json(name = "maps_enabled") val mapsEnabled: Boolean = false,
+    @Json(name = "weather_enabled") val weatherEnabled: Boolean = false,
+    // Restricted, app-shipped Ola tile key — used ONLY to render map tiles on-device.
+    @Json(name = "tile_key") val tileKey: String? = null,
+    // Ola tiles base (e.g. https://api.olamaps.io) for building the style URL.
+    @Json(name = "base_url") val baseUrl: String? = null,
+    // Resolved feature flags (already AND-ed with provider availability + app gate).
+    @Json(name = "features") val features: Map<String, Boolean> = emptyMap()
+)
+
+// ---------------------------------------------------------------------------
+// Autocomplete  ->  GET /api/geo/autocomplete
+// ---------------------------------------------------------------------------
+
+@JsonClass(generateAdapter = true)
+data class GeoAutocompleteDto(
+    @Json(name = "suggestions") val suggestions: List<GeoSuggestionDto> = emptyList(),
+    @Json(name = "_disabled") val disabled: Boolean = false
 )
 
 @JsonClass(generateAdapter = true)
-data class OlaPrediction(
-    @Json(name = "description") val description: String? = null,
+data class GeoSuggestionDto(
     @Json(name = "place_id") val placeId: String? = null,
-    @Json(name = "structured_formatting") val structuredFormatting: OlaStructuredFormatting? = null,
-    @Json(name = "geometry") val geometry: OlaGeometry? = null
-)
-
-@JsonClass(generateAdapter = true)
-data class OlaStructuredFormatting(
-    @Json(name = "main_text") val mainText: String? = null,
-    @Json(name = "secondary_text") val secondaryText: String? = null
-)
-
-@JsonClass(generateAdapter = true)
-data class OlaGeometry(
-    @Json(name = "location") val location: OlaLatLng? = null
-)
-
-@JsonClass(generateAdapter = true)
-data class OlaLatLng(
+    @Json(name = "title") val title: String? = null,
+    @Json(name = "subtitle") val subtitle: String? = null,
     @Json(name = "lat") val lat: Double? = null,
-    @Json(name = "lng") val lng: Double? = null
+    @Json(name = "lon") val lon: Double? = null
 )
 
 // ---------------------------------------------------------------------------
-// Place Details  ->  GET /places/v1/details
+// Place details  ->  GET /api/geo/place-details
 // ---------------------------------------------------------------------------
 
 @JsonClass(generateAdapter = true)
-data class OlaPlaceDetailsResponse(
-    @Json(name = "result") val result: OlaPlaceDetailsResult? = null,
-    @Json(name = "status") val status: String? = null
-)
-
-@JsonClass(generateAdapter = true)
-data class OlaPlaceDetailsResult(
-    @Json(name = "name") val name: String? = null,
-    @Json(name = "formatted_address") val formattedAddress: String? = null,
-    @Json(name = "geometry") val geometry: OlaGeometry? = null
+data class GeoPlaceDetailsDto(
+    @Json(name = "place_id") val placeId: String? = null,
+    @Json(name = "lat") val lat: Double? = null,
+    @Json(name = "lon") val lon: Double? = null,
+    @Json(name = "address") val address: String? = null,
+    @Json(name = "_disabled") val disabled: Boolean = false
 )
 
 // ---------------------------------------------------------------------------
-// Reverse Geocode  ->  GET /places/v1/reverse-geocode
+// Reverse geocode  ->  GET /api/geo/reverse
 // ---------------------------------------------------------------------------
 
 @JsonClass(generateAdapter = true)
-data class OlaReverseGeocodeResponse(
-    @Json(name = "results") val results: List<OlaReverseResult> = emptyList(),
-    @Json(name = "status") val status: String? = null
-)
-
-@JsonClass(generateAdapter = true)
-data class OlaReverseResult(
-    @Json(name = "formatted_address") val formattedAddress: String? = null,
-    @Json(name = "geometry") val geometry: OlaGeometry? = null
+data class GeoReverseDto(
+    @Json(name = "address") val address: String? = null,
+    @Json(name = "city") val city: String? = null,
+    @Json(name = "pincode") val pincode: String? = null,
+    @Json(name = "lat") val lat: Double? = null,
+    @Json(name = "lon") val lon: Double? = null,
+    @Json(name = "_disabled") val disabled: Boolean = false
 )
 
 // ---------------------------------------------------------------------------
-// Directions (route)  ->  POST /routing/v1/directions
+// Directions  ->  GET /api/geo/directions
 // ---------------------------------------------------------------------------
 
 @JsonClass(generateAdapter = true)
-data class OlaDirectionsResponse(
-    @Json(name = "routes") val routes: List<OlaRoute> = emptyList(),
-    @Json(name = "status") val status: String? = null
-)
-
-@JsonClass(generateAdapter = true)
-data class OlaRoute(
-    // Ola returns the full route geometry as an encoded polyline string.
-    @Json(name = "overview_polyline") val overviewPolyline: String? = null,
-    @Json(name = "legs") val legs: List<OlaLeg> = emptyList()
-)
-
-@JsonClass(generateAdapter = true)
-data class OlaLeg(
-    // Ola reports these in meters / seconds plus human-readable variants.
-    @Json(name = "distance") val distanceMeters: Double? = null,
-    @Json(name = "duration") val durationSeconds: Double? = null,
-    @Json(name = "readable_distance") val readableDistance: String? = null,
-    @Json(name = "readable_duration") val readableDuration: String? = null
+data class GeoDirectionsDto(
+    // Google/Ola-encoded polyline (decode with OlaMapsRepository.decodePolyline).
+    @Json(name = "polyline") val polyline: String? = null,
+    @Json(name = "distance_m") val distanceMeters: Int? = null,
+    @Json(name = "duration_s") val durationSeconds: Int? = null,
+    @Json(name = "_disabled") val disabled: Boolean = false
 )
 
 /** Decoded route ready for the UI / map. */

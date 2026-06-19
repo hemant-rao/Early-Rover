@@ -1,5 +1,6 @@
 package com.example.alarm.weather
 
+import com.example.alarm.maps.OlaMapsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -71,17 +72,23 @@ data class DetailedWeatherInfo(
 )
 
 /**
- * Fetches current conditions and extensive forecast/history reports from the free, key-less
- * Open-Meteo API. Supports 10 past days and 10 upcoming days.
+ * §689 — Fetches current conditions + extensive forecast/history reports through the
+ * OdioBook GEO gateway ({server}/api/geo/weather/*), which proxies Open-Meteo and
+ * returns its JSON VERBATIM — so the parsing below is unchanged, only the URL moved.
+ * Centralising via the gateway lets the admin disable/centralise weather; the gateway
+ * supplies all Open-Meteo query params, so the app only sends lat/lon/app.
  */
 object WeatherRepository {
+
+    /** OdioBook server base (single source of truth = OlaMapsRepository.serverBaseUrl). */
+    private fun base(): String =
+        OlaMapsRepository.serverBaseUrl.trim().trimEnd('/').ifBlank { OlaMapsRepository.DEFAULT_SERVER }
 
     suspend fun fetchCurrent(latitude: Double, longitude: Double): WeatherInfo? =
         withContext(Dispatchers.IO) {
             try {
                 val url = URL(
-                    "https://api.open-meteo.com/v1/forecast?latitude=$latitude&longitude=$longitude" +
-                        "&current=temperature_2m,weather_code,is_day,cloud_cover&timezone=auto"
+                    "${base()}/api/geo/weather/current?lat=$latitude&lon=$longitude&app=solaris"
                 )
                 val connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
@@ -117,8 +124,7 @@ object WeatherRepository {
         withContext(Dispatchers.IO) {
             try {
                 val url = URL(
-                    "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=$latitude&longitude=$longitude" +
-                        "&current=european_aqi,us_aqi,pm2_5,pm10&timezone=auto"
+                    "${base()}/api/geo/weather/air-quality?lat=$latitude&lon=$longitude&app=solaris"
                 )
                 val connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
@@ -154,16 +160,10 @@ object WeatherRepository {
     suspend fun fetchDetailed(latitude: Double, longitude: Double): DetailedWeatherInfo? =
         withContext(Dispatchers.IO) {
         try {
-            val urlString = "https://api.open-meteo.com/v1/forecast?" +
-                    "latitude=$latitude" +
-                    "&longitude=$longitude" +
-                    "&current=temperature_2m,weather_code,is_day,cloud_cover,relative_humidity_2m,apparent_temperature,precipitation,wind_speed_10m" +
-                    "&hourly=temperature_2m,weather_code,relative_humidity_2m,apparent_temperature,precipitation,wind_speed_10m" +
-                    "&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset" +
-                    "&past_days=10" +
-                    "&forecast_days=11" +
-                    "&timezone=auto"
-            
+            // §689 — gateway supplies the full Open-Meteo param set (hourly/daily/
+            // past_days=10/forecast_days=11/timezone=auto); response is verbatim.
+            val urlString = "${base()}/api/geo/weather/detailed?lat=$latitude&lon=$longitude&app=solaris"
+
             val url = URL(urlString)
             val connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"

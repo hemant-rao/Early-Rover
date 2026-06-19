@@ -49,19 +49,20 @@ private const val COLOR_CURRENT = "#3B82F6" // blue   (live position)
 private const val COLOR_ROUTE = "#6366F1"
 
 /**
- * One global OkHttp client for MapLibre that appends the Ola api_key to every
- * api.olamaps.io request (tiles / sprites / glyphs referenced inside the style.json
- * do not carry the key themselves). Installed once.
+ * One global OkHttp client for MapLibre that appends the restricted Ola TILE key
+ * to every api.olamaps.io request (tiles / sprites / glyphs referenced inside the
+ * style.json do not carry the key themselves). §689: this is the app-shipped tile
+ * key from the OdioBook geo gateway, NOT the secret REST key. Installed once.
  */
 @Volatile private var httpConfigured = false
 
-private fun ensureOlaHttp(apiKey: String) {
+private fun ensureOlaHttp(tileKey: String) {
     if (httpConfigured) return
     val client = OkHttpClient.Builder().addInterceptor { chain ->
         val req = chain.request()
         val url = req.url
         if (url.host.contains("olamaps.io") && url.queryParameter("api_key") == null) {
-            val newUrl = url.newBuilder().addQueryParameter("api_key", apiKey).build()
+            val newUrl = url.newBuilder().addQueryParameter("api_key", tileKey).build()
             chain.proceed(req.newBuilder().url(newUrl).build())
         } else {
             chain.proceed(req)
@@ -77,13 +78,15 @@ private fun ensureOlaHttp(apiKey: String) {
  * simultaneously. Renders on a translucent texture surface so the app background blends
  * through (the "transparency" requirement).
  *
- * @param apiKey Ola Maps key (from admin config). Caller must ensure it is non-blank.
+ * @param tileKey Restricted Ola tile key from the geo gateway (app-config). Must be non-blank.
+ * @param tileBaseUrl Ola tiles base (app-config base_url), e.g. https://api.olamaps.io.
  */
 @SuppressLint("MissingPermission")
 @Composable
 fun OlaMapView(
-    apiKey: String,
+    tileKey: String,
     modifier: Modifier = Modifier,
+    tileBaseUrl: String = OlaMapsRepository.DEFAULT_TILE_BASE,
     current: GeoPoint? = null,
     from: GeoPoint? = null,
     to: GeoPoint? = null,
@@ -95,7 +98,7 @@ fun OlaMapView(
     val context = LocalContext.current
 
     val mapView = remember {
-        ensureOlaHttp(apiKey)
+        ensureOlaHttp(tileKey)
         MapLibre.getInstance(context.applicationContext)
         val options = MapLibreMapOptions()
             .textureMode(true)               // texture surface -> allows transparency
@@ -133,7 +136,7 @@ fun OlaMapView(
         factory = { mv ->
             mv.getMapAsync { map ->
                 mapRef.value = map
-                map.setStyle(Style.Builder().fromUri(OlaMapsRepository.styleUrl(apiKey, isDark))) { style ->
+                map.setStyle(Style.Builder().fromUri(OlaMapsRepository.styleUrl(tileKey, isDark, tileBaseUrl))) { style ->
                     styleRef.value = style
                     initLayers(style)
                     applyData(map, style, current, from, to, route, followCurrent, firstFit = true)

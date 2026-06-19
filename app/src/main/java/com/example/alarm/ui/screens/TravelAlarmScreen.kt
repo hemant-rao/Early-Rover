@@ -88,11 +88,18 @@ fun TravelAlarmScreen(
     var editingActive by remember { mutableStateOf(true) }
     val isHindi = viewModel.currentLanguage.collectAsStateWithLifecycle().value == "hi"
 
-    // Ola Maps key (admin-configured). When present, place search uses Ola autocomplete and the
-    // interactive map renders; when blank we transparently fall back to the existing city search.
-    val olaApiKey by viewModel.olaMapsApiKey.collectAsStateWithLifecycle()
+    // §689 — geo gateway remote config (from the OdioBook backend). Maps render +
+    // Ola search/route only when the admin has maps ON; the restricted tile key +
+    // tiles base come from app-config. When maps are off we transparently fall back
+    // to the existing OSM city search. No Ola key lives in the app anymore.
+    val geoConfig by viewModel.geoConfig.collectAsStateWithLifecycle()
+    val mapsOn = geoConfig?.mapsEnabled == true
+    val tileKey = geoConfig?.tileKey ?: ""
+    val tileBaseUrl = geoConfig?.baseUrl ?: com.example.alarm.maps.OlaMapsRepository.DEFAULT_TILE_BASE
+    val mapReady = mapsOn && tileKey.isNotBlank()
+    fun geoFeat(key: String): Boolean = geoConfig?.features?.get(key) ?: true
 
-    // Decoded route (FROM -> TO) for the map, fetched from Ola Directions.
+    // Decoded route (FROM -> TO) for the map, fetched via the geo gateway.
     var routePoints by remember { mutableStateOf<List<com.example.alarm.maps.GeoPoint>?>(null) }
 
     // Waypoint properties (TO)
@@ -176,8 +183,8 @@ fun TravelAlarmScreen(
                 kotlinx.coroutines.delay(500) // debounce
                 val results = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     val bias = currentLocation?.let { com.example.alarm.maps.GeoPoint(it.latitude, it.longitude) }
-                    val ola = if (olaApiKey.isNotBlank())
-                        com.example.alarm.maps.OlaMapsRepository.searchPlaces(query, olaApiKey, bias)
+                    val ola = if (mapsOn && geoFeat("autocomplete"))
+                        com.example.alarm.maps.OlaMapsRepository.searchPlaces(query, bias)
                     else emptyList()
                     if (ola.isNotEmpty()) ola
                     else com.example.alarm.location.LocationHelper(context).searchCity(query)
@@ -202,8 +209,8 @@ fun TravelAlarmScreen(
                 kotlinx.coroutines.delay(500) // debounce
                 val results = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     val bias = currentLocation?.let { com.example.alarm.maps.GeoPoint(it.latitude, it.longitude) }
-                    val ola = if (olaApiKey.isNotBlank())
-                        com.example.alarm.maps.OlaMapsRepository.searchPlaces(query, olaApiKey, bias)
+                    val ola = if (mapsOn && geoFeat("autocomplete"))
+                        com.example.alarm.maps.OlaMapsRepository.searchPlaces(query, bias)
                     else emptyList()
                     if (ola.isNotEmpty()) ola
                     else com.example.alarm.location.LocationHelper(context).searchCity(query)
@@ -228,10 +235,10 @@ fun TravelAlarmScreen(
     }
     // Route origin: the start fix when tracking, else the device's current position.
     val routeFrom = mapFrom ?: mapCurrent
-    LaunchedEffect(routeFrom, mapTo, olaApiKey) {
+    LaunchedEffect(routeFrom, mapTo, mapsOn) {
         val f = routeFrom; val t = mapTo
-        routePoints = if (f != null && t != null && olaApiKey.isNotBlank()) {
-            com.example.alarm.maps.OlaMapsRepository.route(f, t, olaApiKey)?.points
+        routePoints = if (f != null && t != null && mapsOn && geoFeat("directions")) {
+            com.example.alarm.maps.OlaMapsRepository.route(f, t)?.points
         } else null
     }
 
@@ -590,7 +597,7 @@ fun TravelAlarmScreen(
 
             // Live interactive Ola map (current + FROM/TO markers + route, all together).
             item {
-                if (olaApiKey.isNotBlank()) {
+                if (mapReady) {
                     Card(
                         modifier = Modifier.fillMaxWidth().shadow(8.dp, RoundedCornerShape(24.dp)),
                         shape = RoundedCornerShape(24.dp),
@@ -616,7 +623,8 @@ fun TravelAlarmScreen(
                                     .clip(RoundedCornerShape(16.dp))
                             ) {
                                 com.example.alarm.maps.OlaMapView(
-                                    apiKey = olaApiKey,
+                                    tileKey = tileKey,
+                                    tileBaseUrl = tileBaseUrl,
                                     modifier = Modifier.fillMaxSize(),
                                     current = mapCurrent,
                                     from = mapFrom,
@@ -652,8 +660,8 @@ fun TravelAlarmScreen(
                             Spacer(modifier = Modifier.width(12.dp))
                             Text(
                                 text = t(
-                                    "Add your Ola Maps API key in Settings → Advanced to unlock the live map, route & smart search.",
-                                    "लाइव मैप, रूट और स्मार्ट सर्च के लिए Settings → Advanced में अपनी Ola Maps API key जोड़ें।"
+                                    "Live map is currently unavailable. Place search still works; the map turns on automatically once enabled.",
+                                    "लाइव मैप अभी उपलब्ध नहीं है। जगह खोज काम करती रहेगी; सक्षम होते ही मैप अपने-आप चालू हो जाएगा।"
                                 ),
                                 fontSize = 11.sp,
                                 color = SleekMutedText,

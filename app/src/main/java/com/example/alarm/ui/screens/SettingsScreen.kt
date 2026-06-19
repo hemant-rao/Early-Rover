@@ -833,34 +833,26 @@ fun AdvancedTab(viewModel: AlarmViewModel, onNavigateToPrivacyPolicy: () -> Unit
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(imageVector = Icons.Default.Map, contentDescription = null, tint = SleekPrimary, modifier = Modifier.size(20.dp))
                     Spacer(modifier = Modifier.width(10.dp))
-                    Text(viewModel.translate("Ola Maps API Key"), fontWeight = FontWeight.Bold, color = SleekActiveText, fontSize = 15.sp)
+                    Text(viewModel.translate("OdioBook Server URL"), fontWeight = FontWeight.Bold, color = SleekActiveText, fontSize = 15.sp)
                 }
                 Text(
-                    text = viewModel.translate("Enter your Ola Maps API key to enable the live travel map, route drawing and place search. Get a key from maps.olakrutrim.com."),
+                    text = viewModel.translate("Location & weather are powered by the OdioBook server (no API key needed in the app). Leave the default unless you run your own server."),
                     fontSize = 12.sp,
                     color = SleekMutedText
                 )
 
-                val savedOlaKey by viewModel.olaMapsApiKey.collectAsState()
-                var olaKeyInput by remember(savedOlaKey) { mutableStateOf(savedOlaKey) }
-                var olaKeyVisible by remember { mutableStateOf(false) }
+                // §689 — repurposed from the old in-app Ola key field. The app no
+                // longer stores any Ola credential; only the OdioBook server URL.
+                val savedServerUrl by viewModel.serverBaseUrl.collectAsState()
+                var serverUrlInput by remember(savedServerUrl) { mutableStateOf(savedServerUrl) }
 
                 OutlinedTextField(
-                    value = olaKeyInput,
-                    onValueChange = { olaKeyInput = it },
-                    label = { Text(viewModel.translate("Ola Maps API Key")) },
+                    value = serverUrlInput,
+                    onValueChange = { serverUrlInput = it },
+                    label = { Text(viewModel.translate("OdioBook Server URL")) },
                     singleLine = true,
-                    visualTransformation = if (olaKeyVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { olaKeyVisible = !olaKeyVisible }) {
-                            Icon(
-                                imageVector = if (olaKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                contentDescription = if (olaKeyVisible) "Hide" else "Show",
-                                tint = SleekMutedText
-                            )
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().testTag("ola_api_key_input"),
+                    placeholder = { Text("https://odiobook.com") },
+                    modifier = Modifier.fillMaxWidth().testTag("odiobook_server_url_input"),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = SleekPrimary,
                         unfocusedBorderColor = SleekBorder,
@@ -873,32 +865,24 @@ fun AdvancedTab(viewModel: AlarmViewModel, onNavigateToPrivacyPolicy: () -> Unit
                 val keyContext = LocalContext.current
                 Button(
                     onClick = {
-                        viewModel.setOlaMapsApiKey(olaKeyInput)
+                        viewModel.setServerBaseUrl(serverUrlInput)
                         android.widget.Toast.makeText(
                             keyContext,
-                            viewModel.translate(if (olaKeyInput.isBlank()) "Ola Maps key cleared" else "Ola Maps key saved"),
+                            viewModel.translate("Server URL saved"),
                             android.widget.Toast.LENGTH_SHORT
                         ).show()
                     },
-                    modifier = Modifier.fillMaxWidth().testTag("ola_api_key_save"),
+                    modifier = Modifier.fillMaxWidth().testTag("odiobook_server_url_save"),
                     colors = ButtonDefaults.buttonColors(containerColor = SleekPrimary)
                 ) {
-                    Text(viewModel.translate("Save Key"), color = Color.White)
+                    Text(viewModel.translate("Save"), color = Color.White)
                 }
 
-                if (savedOlaKey.isBlank()) {
-                    Text(
-                        text = viewModel.translate("Map disabled — key required. The app will keep using the basic city search until a key is added."),
-                        fontSize = 11.sp,
-                        color = Color(0xFFF59E0B)
-                    )
-                } else {
-                    Text(
-                        text = viewModel.translate("Ola Maps active ✓"),
-                        fontSize = 11.sp,
-                        color = Color(0xFF10B981)
-                    )
-                }
+                Text(
+                    text = viewModel.translate("Connected to OdioBook ✓ — maps & weather are managed remotely by the admin."),
+                    fontSize = 11.sp,
+                    color = Color(0xFF10B981)
+                )
             }
         }
 

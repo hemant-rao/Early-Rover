@@ -7,6 +7,7 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
 import android.location.Location
+import com.example.alarm.maps.OlaMapsRepository
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
@@ -661,10 +662,13 @@ class LocationHelper(private val context: Context) {
     // Must be called off the main thread (performs blocking network I/O).
     private fun resolveTimezoneOffset(lat: Double, lng: Double): Double? {
         return try {
-            val url = URL(
-                "https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lng" +
-                    "&timezone=auto&forecast_days=1"
-            )
+            // §689 — routed through the OdioBook geo gateway. weather/current passes
+            // timezone=auto upstream, so the response still carries the top-level
+            // "timezone" field we read here. Null on any failure keeps the caller's
+            // existing offset (callers refuse to persist a guess).
+            val base = OlaMapsRepository.serverBaseUrl.trim().trimEnd('/')
+                .ifBlank { OlaMapsRepository.DEFAULT_SERVER }
+            val url = URL("$base/api/geo/weather/current?lat=$lat&lon=$lng&app=solaris")
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 4000

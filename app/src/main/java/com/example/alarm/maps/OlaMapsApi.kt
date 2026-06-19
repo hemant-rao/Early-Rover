@@ -1,46 +1,49 @@
 package com.example.alarm.maps
 
 import retrofit2.http.GET
-import retrofit2.http.POST
 import retrofit2.http.Query
 
 /**
- * Ola Maps REST endpoints (base https://api.olamaps.io). Auth is the API key passed as the
- * `api_key` query parameter on every call (see https://maps.olakrutrim.com/docs/auth).
+ * §689 — OdioBook GEO gateway REST endpoints (base {server}/, e.g.
+ * https://odiobook.com/). The app passes NO API key — the OdioBook backend
+ * injects the admin-managed Ola REST key server-side. ``app`` identifies this
+ * client ("solaris") so the admin can toggle features per app.
  */
 interface OlaMapsApi {
 
-    @GET("places/v1/autocomplete")
-    suspend fun autocomplete(
-        @Query("input") input: String,
-        @Query("api_key") apiKey: String,
-        // Bias suggestions around the user when we know where they are (lat,lng).
-        @Query("location") location: String? = null
-    ): OlaAutocompleteResponse
+    @GET("api/geo/app-config")
+    suspend fun appConfig(
+        @Query("app") app: String
+    ): GeoAppConfigDto
 
-    @GET("places/v1/details")
+    @GET("api/geo/autocomplete")
+    suspend fun autocomplete(
+        @Query("q") input: String,
+        @Query("app") app: String,
+        // Bias suggestions around the user when we know where they are.
+        @Query("lat") lat: Double? = null,
+        @Query("lon") lon: Double? = null
+    ): GeoAutocompleteDto
+
+    @GET("api/geo/place-details")
     suspend fun placeDetails(
         @Query("place_id") placeId: String,
-        @Query("api_key") apiKey: String
-    ): OlaPlaceDetailsResponse
+        @Query("app") app: String
+    ): GeoPlaceDetailsDto
 
-    @GET("places/v1/geocode")
-    suspend fun geocode(
-        @Query("address") address: String,
-        @Query("api_key") apiKey: String
-    ): OlaReverseGeocodeResponse
+    @GET("api/geo/reverse")
+    suspend fun reverse(
+        @Query("lat") lat: Double,
+        @Query("lon") lon: Double,
+        @Query("app") app: String
+    ): GeoReverseDto
 
-    @GET("places/v1/reverse-geocode")
-    suspend fun reverseGeocode(
-        @Query("latlng") latlng: String,
-        @Query("api_key") apiKey: String
-    ): OlaReverseGeocodeResponse
-
-    // Ola's directions endpoint is a POST that takes its parameters in the query string.
-    @POST("routing/v1/directions")
+    @GET("api/geo/directions")
     suspend fun directions(
-        @Query("origin") origin: String,
-        @Query("destination") destination: String,
-        @Query("api_key") apiKey: String
-    ): OlaDirectionsResponse
+        @Query("from_lat") fromLat: Double,
+        @Query("from_lon") fromLon: Double,
+        @Query("to_lat") toLat: Double,
+        @Query("to_lon") toLon: Double,
+        @Query("app") app: String
+    ): GeoDirectionsDto
 }

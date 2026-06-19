@@ -15,6 +15,8 @@ import com.example.alarm.location.CityInfo
 import com.example.alarm.location.LocationHelper
 import com.example.alarm.data.TravelAlarm
 import com.example.alarm.location.TravelTrackingService
+import com.example.alarm.maps.GeoAppConfigDto
+import com.example.alarm.maps.OlaMapsRepository
 import com.example.alarm.scheduling.AlarmScheduler
 import com.example.alarm.scheduling.AlarmService
 import com.example.alarm.weather.WeatherInfo
@@ -183,16 +185,50 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLocationEnabled = MutableStateFlow(settingsPrefs.getBoolean(FEATURE_LOCATION, true))
     val isLocationEnabled: StateFlow<Boolean> = _isLocationEnabled.asStateFlow()
 
-    // Ola Maps API key — admin-configurable (Settings > Advanced), stored alongside other
-    // settings so the map / Places / Directions stay fully dynamic (no hardcoded key).
-    private val OLA_MAPS_API_KEY = "ola_maps_api_key"
-    private val _olaMapsApiKey = MutableStateFlow(settingsPrefs.getString(OLA_MAPS_API_KEY, "") ?: "")
-    val olaMapsApiKey: StateFlow<String> = _olaMapsApiKey.asStateFlow()
+    // §689 — OdioBook geo gateway. The app no longer holds the Ola Maps REST key:
+    // ALL location + weather traffic is proxied through the OdioBook backend, which
+    // injects the admin-managed key server-side. The only thing configurable here
+    // is the OdioBook SERVER URL (defaults to production). Which map/weather
+    // features are on, and the restricted map-tile key, are fetched at runtime from
+    // /api/geo/app-config so everything stays remotely admin-controlled.
+    private val SERVER_BASE_URL = "odiobook_server_url"
+    private val _serverBaseUrl = MutableStateFlow(
+        (settingsPrefs.getString(SERVER_BASE_URL, "") ?: "").ifBlank { OlaMapsRepository.DEFAULT_SERVER }
+    )
+    val serverBaseUrl: StateFlow<String> = _serverBaseUrl.asStateFlow()
 
-    fun setOlaMapsApiKey(key: String) {
-        val trimmed = key.trim()
-        _olaMapsApiKey.value = trimmed
-        settingsPrefs.edit().putString(OLA_MAPS_API_KEY, trimmed).apply()
+    fun setServerBaseUrl(url: String) {
+        val trimmed = url.trim().ifBlank { OlaMapsRepository.DEFAULT_SERVER }
+        _serverBaseUrl.value = trimmed
+        OlaMapsRepository.serverBaseUrl = trimmed
+        settingsPrefs.edit().putString(SERVER_BASE_URL, trimmed).apply()
+        refreshGeoConfig()
+    }
+
+    // Remote geo config (resolved feature flags + restricted tile key + tile base
+    // url). Null until the first fetch / when offline — callers treat null as
+    // "unknown ⇒ attempt anyway" (the backend is the source of truth).
+    private val _geoConfig = MutableStateFlow<GeoAppConfigDto?>(null)
+    val geoConfig: StateFlow<GeoAppConfigDto?> = _geoConfig.asStateFlow()
+
+    fun refreshGeoConfig() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val cfg = OlaMapsRepository.appConfig()
+            if (cfg != null) _geoConfig.value = cfg
+        }
+    }
+
+    /** A geo-gateway feature flag, defaulting to ON when config is unknown. */
+    private fun geoFeatureOn(key: String): Boolean {
+        val cfg = _geoConfig.value ?: return true
+        return cfg.features[key] ?: true
+    }
+
+    init {
+        // Point the shared geo client at the configured OdioBook server and pull the
+        // remote feature config once at startup (best-effort; null on offline).
+        OlaMapsRepository.serverBaseUrl = _serverBaseUrl.value
+        refreshGeoConfig()
     }
 
     fun setFeatureEnabled(key: String, enabled: Boolean) {
@@ -676,7 +712,12 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         weatherJob = viewModelScope.launch(Dispatchers.IO) {
             try {
                 var primaryOk = false
-                val detailed = WeatherRepository.fetchDetailed(lat, lng)
+                // §689 — honour the geo-gateway feature flags. Unknown (config not
+                // yet fetched / offline) ⇒ attempt anyway; the backend enforces.
+                val wantDetailed = geoFeatureOn("weather_detailed")
+                val wantCurrent = geoFeatureOn("weather_current")
+                val wantAqi = geoFeatureOn("air_quality")
+                val detailed = if (wantDetailed) WeatherRepository.fetchDetailed(lat, lng) else null
                 // Staleness guard: if the active city changed while the network call was in flight,
                 // drop these results so we don't overwrite current-city data or poison the throttle.
                 if (abs(_latitude.value - lat) > WEATHER_THROTTLE_EPSILON ||
@@ -715,14 +756,14 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     primaryOk = true
                 } else {
-                    val info = WeatherRepository.fetchCurrent(lat, lng)
+                    val info = if (wantCurrent) WeatherRepository.fetchCurrent(lat, lng) else null
                     if (info != null) {
                         _weather.value = info
                         primaryOk = true
                     }
                 }
                 // Air quality for the same coordinates (null-safe; leaves prior value on failure).
-                val aqi = WeatherRepository.fetchAirQuality(lat, lng)
+                val aqi = if (wantAqi) WeatherRepository.fetchAirQuality(lat, lng) else null
                 // Re-apply the staleness guard before writing: the AQI request can finish after the
                 // user switches cities, and unlike the detailed fetch above there was no second check,
                 // so the old city's AQI could overwrite the new active city's display.
