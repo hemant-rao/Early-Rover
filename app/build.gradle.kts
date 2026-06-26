@@ -70,6 +70,8 @@ secrets {
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
+  implementation(libs.firebase.analytics)  // §750 — Google Analytics (auto-inits from google-services.json; see SolarAnalytics)
+  implementation(libs.play.services.ads)   // §750 — AdMob (one non-intrusive bottom banner; see SolarAds)
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
@@ -118,4 +120,17 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
+}
+
+// §750 — Firebase Analytics needs the Google Services plugin to process
+// app/google-services.json into resources. Apply it ONLY when that file is
+// present, so the project keeps building before Firebase is configured (this
+// `if` is false today → no-op, build unchanged). To enable analytics:
+//   1. Add app/google-services.json from the Firebase console (package
+//      com.aistudio.sunalarm.pzhkrm2).
+//   2. That's it — the plugin is already on the classpath (root build.gradle.kts
+//      `alias(libs.plugins.google.services) apply false`) and applied below.
+// AdMob does NOT need this plugin — only the manifest APPLICATION_ID meta-data.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
 }

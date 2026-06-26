@@ -65,7 +65,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
+        // §750 — Google Analytics (Firebase) + AdMob. Both no-op-safe: Analytics
+        // stays off until app/google-services.json is added; MobileAds.initialize
+        // is safe with the manifest's (placeholder TEST) AdMob app id.
+        com.example.analytics.SolarAnalytics.init(applicationContext)
+        com.example.analytics.SolarAnalytics.event("app_open")
+        try { com.google.android.gms.ads.MobileAds.initialize(applicationContext) } catch (_: Throwable) {}
+
         // Show over lockscreen and turn screen on for full-screen alarm intents
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
@@ -167,7 +174,15 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme(darkTheme = darkTheme) {
                 Box(modifier = Modifier.fillMaxSize()) {
                 val navController = rememberNavController()
-                
+
+                // §750 — log a screen_view on each navigation destination change.
+                // No-op until Firebase Analytics is configured (google-services.json).
+                LaunchedEffect(navController) {
+                    navController.currentBackStackEntryFlow.collect { entry ->
+                        entry.destination.route?.let { com.example.analytics.SolarAnalytics.screen(it) }
+                    }
+                }
+
                 // Ringing screen state overlay
                 val ringingState by viewModel.ringingAlarm.collectAsState()
 

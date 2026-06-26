@@ -851,6 +851,16 @@ fun DashboardScreen(
                                 }
                             }
                         }
+                        // §750 — one small, non-intrusive banner pinned to the very
+                        // bottom of the alarm list. It scrolls past with the content and
+                        // never overlaps the clock, sun cards, or controls; no
+                        // interstitials or pop-ups (mirrors OdioBook's "don't annoy"
+                        // ad philosophy). No-op until AdMob is configured.
+                        item {
+                            com.example.ads.SolarBannerAd(
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
                     }
                 }
 

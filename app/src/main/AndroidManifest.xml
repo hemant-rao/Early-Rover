@@ -34,7 +34,16 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication">
-        
+
+        <!-- §750 — AdMob application id. This is Google's official TEST app id
+             (safe to ship — it only ever serves test ads). Replace with the real
+             AdMob app id recorded in the OdioBook admin (Branding > Other Apps >
+             Solar AdMob App ID) before a production release. Required by the
+             Mobile Ads SDK; without it the app crashes on ad init. -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-3940256099942544~3347511713" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
