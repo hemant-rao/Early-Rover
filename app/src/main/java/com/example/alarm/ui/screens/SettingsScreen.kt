@@ -1015,6 +1015,27 @@ fun AdvancedTab(viewModel: AlarmViewModel, onNavigateToPrivacyPolicy: () -> Unit
                     color = SleekMutedText,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // §776 — quiet "part of the OdioBook family" attribution. OdioBook
+                // (odiobook.com) is the parent company behind Solaris, Veda Drop &
+                // Dig Deep. Kept understated (small, muted) so it's present but not
+                // dominant — see the matching note in the sibling apps.
+                Text(
+                    text = viewModel.translate("PART OF THE ODIOBOOK FAMILY"),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = SleekSecondary,
+                    letterSpacing = 1.5.sp
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = viewModel.translate("Solaris is built by OdioBook — the company behind a family of apps including Veda Drop and Dig Deep. odiobook.com"),
+                    fontSize = 11.sp,
+                    textAlign = TextAlign.Center,
+                    color = SleekMutedText,
+                    modifier = Modifier.padding(horizontal = 12.dp)
+                )
                 Spacer(modifier = Modifier.height(16.dp))
                 TextButton(onClick = onNavigateToPrivacyPolicy) {
                     Text(viewModel.translate("Privacy Policy"), color = SleekPrimary)
