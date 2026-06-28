@@ -7,7 +7,7 @@ import retrofit2.http.Query
  * §689 — OdioBook GEO gateway REST endpoints (base {server}/, e.g.
  * https://odiobook.com/). The app passes NO API key — the OdioBook backend
  * injects the admin-managed Ola REST key server-side. ``app`` identifies this
- * client ("solaris") so the admin can toggle features per app.
+ * client ("earlyrover") so the admin can toggle features per app.
  */
 interface OlaMapsApi {
 

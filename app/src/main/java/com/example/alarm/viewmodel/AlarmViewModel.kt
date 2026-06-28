@@ -486,7 +486,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "Render dark celestial color profiles" to "गहरी रंग थीम चालू करें",
         "Applying language…" to "भाषा बदल रही है…",
         // Full-screen alarm ring screen
-        "SOLARIS ALERT TRIGGERED" to "अलार्म बज रहा है",
+        "EARLY ROVER ALERT TRIGGERED" to "अलार्म बज रहा है",
         "SECURE ARRIVAL SENTRY DETECTED" to "मंज़िल आ गई है",
         "Dynamic Daylight Call" to "दिन की शुरुआत",
         "Solar Sunrise Synchronized Alarm" to "सूर्योदय का अलार्म",
@@ -541,7 +541,7 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "GPS Location Detected" to "जीपीएस द्वारा स्थान मिला",
         "Next Alarm" to "अगला अलार्म",
         "No Alarms Scheduled" to "कोई अलार्म नहीं लगा है",
-        "SOLARIS LIVE" to "अर्ली रोवर लाइव",
+        "EARLY ROVER LIVE" to "अर्ली रोवर लाइव",
         "Hour" to "घंटा",
         "Minute" to "मिनट",
         "Go back" to "वापस जाएं",
@@ -571,9 +571,9 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
         "To guarantee the alarm triggers precisely on-time when the physical screen is off, newer Android versions require excluding the app from system-level battery optimizations." to "फ़ोन की स्क्रीन बंद होने पर भी अलार्म ठीक समय पर बजे, इसके लिए एंड्रॉयड सेटिंग्स से इस ऐप को बैटरी ऑप्टिमाइज़ेशन से हटाना ज़रूरी है।",
         "Go to system App Info -> Battery -> and select 'Unrestricted' for completely uninterrupted wake alarm service." to "ऐप इन्फो (App Info) -> बैटरी पर जाएं और 'अनरेस्ट्रिक्टेड (Unrestricted)' चुनें।",
         "System Exact Alarm Permission" to "सटीक अलार्म की अनुमति",
-        "Solari uses System Alarm Clock info APIs which list upcoming alerts on your lockscreen and bypass Silent / Do Not Disturb boundaries." to "Early Rover सिस्टम अलार्म की परमिशन लेता है ताकि अलार्म 'डू नॉट डिस्टर्ब' और 'साइलेंट' मोड पर भी ज़ोर से बज सके।",
+        "Early Rover uses System Alarm Clock info APIs which list upcoming alerts on your lockscreen and bypass Silent / Do Not Disturb boundaries." to "Early Rover सिस्टम अलार्म की परमिशन लेता है ताकि अलार्म 'डू नॉट डिस्टर्ब' और 'साइलेंट' मोड पर भी ज़ोर से बज सके।",
         "If scheduled warnings seem deactivated, ensure 'Alarms & Reminders' permission is granted in the device settings panel." to "अगर अलार्म नहीं बज रहा, तो फ़ोन की सेटिंग्स में जाकर पक्का करें कि इस ऐप के पास 'अलार्म और रिमाइंडर (Alarms & Reminders)' की अनुमति चालू है।",
-        "SOLARIS ALARM COMPASS" to "EARLY ROVER",
+        "EARLY ROVER ALARM COMPASS" to "EARLY ROVER",
         "Version 1.0.0 (Concept Edition)" to "वर्ज़न 1.0.0",
         "Developed using modern Jetpack Compose, Room reactive databases, Alarm Clock APIs, and hardware-accelerated OpenGL ES 2.0 visualization." to "Early Rover (अर्ली रोवर) आपको समय पर जगाने और किसी भी सफर के दौरान सुरक्षित रखने में मदद करता है।"
     )

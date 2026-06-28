@@ -46,6 +46,6 @@ Visualize your upcoming week using interactive tools.
 Location and weather are **proxied through the OdioBook backend**, not called directly:
 
 *   **No API keys in the app.** The Ola Maps REST key lives only on the OdioBook server. The app calls `{server}/api/geo/*` (autocomplete, place-details, reverse, directions) and `{server}/api/geo/weather/*` (current / detailed / air-quality), and the backend injects the credential server-side.
-*   **Remotely configurable.** On startup the app fetches `{server}/api/geo/app-config?app=solaris` for the resolved feature flags + the restricted map-tile key + tiles base URL. The OdioBook admin "Location & Maps" tab can turn any feature on/off per app with no app update.
+*   **Remotely configurable.** On startup the app fetches `{server}/api/geo/app-config?app=earlyrover` for the resolved feature flags + the restricted map-tile key + tiles base URL. The OdioBook admin "Location & Maps" tab can turn any feature on/off per app with no app update.
 *   **Map tiles** still render on-device with the restricted tile key (returned by app-config); the secret REST key never ships.
 *   **One setting.** Settings → Advanced → **"OdioBook Server URL"** (default `https://odiobook.com`) is the only location/weather config in the app. Graceful fallback to the built-in OSM city search remains when maps are off/unreachable.

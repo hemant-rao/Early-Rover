@@ -668,7 +668,7 @@ class LocationHelper(private val context: Context) {
             // existing offset (callers refuse to persist a guess).
             val base = OlaMapsRepository.serverBaseUrl.trim().trimEnd('/')
                 .ifBlank { OlaMapsRepository.DEFAULT_SERVER }
-            val url = URL("$base/api/geo/weather/current?lat=$lat&lon=$lng&app=solaris")
+            val url = URL("$base/api/geo/weather/current?lat=$lat&lon=$lng&app=earlyrover")
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 4000

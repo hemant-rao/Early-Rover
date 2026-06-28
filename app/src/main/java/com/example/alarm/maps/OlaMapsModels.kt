@@ -20,7 +20,7 @@ import com.squareup.moshi.JsonClass
 data class GeoPoint(val latitude: Double, val longitude: Double)
 
 // ---------------------------------------------------------------------------
-// Remote config  ->  GET /api/geo/app-config?app=solaris
+// Remote config  ->  GET /api/geo/app-config?app=earlyrover
 // ---------------------------------------------------------------------------
 
 @JsonClass(generateAdapter = true)

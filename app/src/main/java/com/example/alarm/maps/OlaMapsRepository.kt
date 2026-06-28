@@ -33,7 +33,7 @@ object OlaMapsRepository {
     const val DEFAULT_TILE_BASE = "https://api.olamaps.io"
 
     /** This client's app id, so the admin can gate features per app. */
-    private const val APP = "solaris"
+    private const val APP = "earlyrover"
 
     /** Configured OdioBook server. Setting a new value rebuilds the Retrofit api. */
     @Volatile

@@ -88,7 +88,7 @@ object WeatherRepository {
         withContext(Dispatchers.IO) {
             try {
                 val url = URL(
-                    "${base()}/api/geo/weather/current?lat=$latitude&lon=$longitude&app=solaris"
+                    "${base()}/api/geo/weather/current?lat=$latitude&lon=$longitude&app=earlyrover"
                 )
                 val connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
@@ -124,7 +124,7 @@ object WeatherRepository {
         withContext(Dispatchers.IO) {
             try {
                 val url = URL(
-                    "${base()}/api/geo/weather/air-quality?lat=$latitude&lon=$longitude&app=solaris"
+                    "${base()}/api/geo/weather/air-quality?lat=$latitude&lon=$longitude&app=earlyrover"
                 )
                 val connection = (url.openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
@@ -162,7 +162,7 @@ object WeatherRepository {
         try {
             // §689 — gateway supplies the full Open-Meteo param set (hourly/daily/
             // past_days=10/forecast_days=11/timezone=auto); response is verbatim.
-            val urlString = "${base()}/api/geo/weather/detailed?lat=$latitude&lon=$longitude&app=solaris"
+            val urlString = "${base()}/api/geo/weather/detailed?lat=$latitude&lon=$longitude&app=earlyrover"
 
             val url = URL(urlString)
             val connection = (url.openConnection() as HttpURLConnection).apply {
