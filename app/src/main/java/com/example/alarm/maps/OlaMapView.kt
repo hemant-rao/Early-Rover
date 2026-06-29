@@ -133,8 +133,8 @@ fun OlaMapView(
 
     AndroidView(
         modifier = modifier.fillMaxSize(),
-        factory = { mv ->
-            mv.getMapAsync { map ->
+        factory = { _ ->
+            mapView.getMapAsync { map ->
                 mapRef.value = map
                 map.setStyle(Style.Builder().fromUri(OlaMapsRepository.styleUrl(tileKey, isDark, tileBaseUrl))) { style ->
                     styleRef.value = style
@@ -142,7 +142,7 @@ fun OlaMapView(
                     applyData(map, style, current, from, to, route, followCurrent, firstFit = true)
                 }
             }
-            mv
+            mapView
         },
         update = { _ ->
             val map = mapRef.value

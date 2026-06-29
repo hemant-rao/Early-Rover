@@ -7,7 +7,7 @@ import com.squareup.moshi.JsonClass
  * §689 — DTOs for the OdioBook GEO gateway (NOT Ola's raw shapes).
  *
  * The app no longer talks to api.olamaps.io directly; it calls the OdioBook
- * backend at {server}/api/geo/*, which proxies Ola with the admin-managed REST
+ * backend at {server}/api/geo/, which proxies Ola with the admin-managed REST
  * key (server-side only) and returns these STABLE normalised envelopes. The only
  * Ola credential on-device is the restricted *tile* key, delivered via
  * [GeoAppConfigDto.tileKey] and used solely to render map tiles.

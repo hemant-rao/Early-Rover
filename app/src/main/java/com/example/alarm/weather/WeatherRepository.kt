@@ -73,7 +73,7 @@ data class DetailedWeatherInfo(
 
 /**
  * §689 — Fetches current conditions + extensive forecast/history reports through the
- * OdioBook GEO gateway ({server}/api/geo/weather/*), which proxies Open-Meteo and
+ * OdioBook GEO gateway ({server}/api/geo/weather/), which proxies Open-Meteo and
  * returns its JSON VERBATIM — so the parsing below is unchanged, only the URL moved.
  * Centralising via the gateway lets the admin disable/centralise weather; the gateway
  * supplies all Open-Meteo query params, so the app only sends lat/lon/app.

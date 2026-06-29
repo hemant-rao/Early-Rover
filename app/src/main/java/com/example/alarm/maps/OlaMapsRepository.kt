@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
  * §689 — Thin client for the OdioBook GEO gateway.
  *
  * The Ola Maps REST key NO LONGER lives in the app: every Places / geocode /
- * directions call is proxied through {server}/api/geo/*, which injects the
+ * directions call is proxied through {server}/api/geo/, which injects the
  * admin-managed key server-side. The only thing configurable on-device is the
  * OdioBook [serverBaseUrl]; which features are on (and the restricted tile key
  * for rendering tiles) come from [appConfig].
