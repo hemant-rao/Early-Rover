@@ -72,6 +72,9 @@ class MainActivity : ComponentActivity() {
         com.example.analytics.SolarAnalytics.init(applicationContext)
         com.example.analytics.SolarAnalytics.event("app_open")
         try { com.google.android.gms.ads.MobileAds.initialize(applicationContext) } catch (_: Throwable) {}
+        // §778 — config-driven OdioBook ads: fetch this app's slice from the backend
+        // (admin-controlled). No-op until the admin enables ads for "earlyrover".
+        com.example.ads.OdioBookAds.init(applicationContext, "earlyrover")
 
         // Show over lockscreen and turn screen on for full-screen alarm intents
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -251,6 +254,8 @@ class MainActivity : ComponentActivity() {
                                     navController.navigate("location")
                                 },
                                 onNavigateToSettings = {
+                                    // §778 — full-screen ad at a natural break (paced + capped 5/day).
+                                    com.example.ads.OdioBookAds.maybeShowInterstitial(this@MainActivity)
                                     navController.navigate("settings")
                                 },
                                 onNavigateToManageCities = {

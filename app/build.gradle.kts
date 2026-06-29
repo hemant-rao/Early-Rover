@@ -71,7 +71,7 @@ dependencies {
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
   implementation(libs.firebase.analytics)  // §750 — Google Analytics (auto-inits from google-services.json; see SolarAnalytics)
-  implementation(libs.play.services.ads)   // §750 — AdMob (one non-intrusive bottom banner; see SolarAds)
+  implementation(libs.play.services.ads)   // §778 — AdMob (config-driven; see com.example.ads.OdioBookAds)
   // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
   // implementation(libs.androidx.camera.camera2)
