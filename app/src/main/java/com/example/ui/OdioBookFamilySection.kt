@@ -72,6 +72,10 @@ private data class FamilyApp(
 
 private const val ODIOBOOK_HOME = "https://odiobook.com"
 private const val ODIOBOOK_APPS_HUB = "https://odiobook.com/apps"
+// §787 — DailyFoodServe is a WEB member of the family with a known public URL, so
+// (unlike the Android siblings whose Play links aren't known offline) its fallback
+// row links straight to the site. The live directory returns the same store_url.
+private const val DAILYFOODSERVE_URL = "https://dailyfoodserve.com/"
 
 // OdioBook is the constant parent studio — always shown first, always points to
 // the main site. Only the sibling apps below it are fetched live.
@@ -89,6 +93,7 @@ private val FALLBACK_SIBLINGS = listOf(
     FamilyApp("Early Rover", "Smart alarm, weather & travel wake-up", Color(0xFFF5A623), ODIOBOOK_APPS_HUB),
     FamilyApp("Dig Deep", "Secure data shredder & recovery", Color(0xFF10B981), ODIOBOOK_APPS_HUB),
     FamilyApp("Xello Mind", "Active-memory trainer with speech feedback", Color(0xFF13B4A2), ODIOBOOK_APPS_HUB),
+    FamilyApp("DailyFoodServe", "Fresh home-style meals, served daily", Color(0xFF055160), DAILYFOODSERVE_URL),
 )
 
 // Keep the established brand colours for the known apps; derive a stable, pleasant
@@ -100,6 +105,7 @@ private val KNOWN_ACCENTS = mapOf(
     "early rover" to Color(0xFFF5A623),
     "dig deep" to Color(0xFF10B981),
     "xello mind" to Color(0xFF13B4A2),
+    "dailyfoodserve" to Color(0xFF055160),
 )
 private val ACCENT_PALETTE = listOf(
     Color(0xFF6D5EF6), Color(0xFF00AAAD), Color(0xFFF5A623), Color(0xFF10B981),
