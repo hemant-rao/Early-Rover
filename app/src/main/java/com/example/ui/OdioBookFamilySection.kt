@@ -18,6 +18,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,9 +31,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
 
 /**
- * §777 — "The OdioBook Family" cross-promotion section.
+ * §777 / §780 — "The OdioBook Family" cross-promotion section.
  *
  * A single, self-contained Composable shared (copy-identical) across every
  * OdioBook-family Android app — Veda Drop, Early Rover, Dig Deep & Xello Mind.
@@ -40,10 +46,19 @@ import com.example.R
  * about the others, so a download of one can lift them all, and every tap funnels
  * traffic back to odiobook.com.
  *
- * Deliberately dependency-free: pure Compose + Material3 theme colours (so it
- * inherits each app's look automatically) + the bundled `odiobook_logo` drawable
- * + LocalUriHandler for the clickable links. No network, no Coil, no new Gradle
- * deps — drop the file in, add the drawable, call the function.
+ * §780 — the sibling list is now DYNAMIC. It is fetched live from the OdioBook
+ * backend directory (GET https://odiobook.com/api/showcase/apps — the same source
+ * that powers odiobook.com/apps and the admin "Showcase → Apps" console) so adding,
+ * renaming or re-tagging an app in admin propagates to every installed app on its
+ * next open — no APK rebuild. Until then this APK had to be rebuilt for every
+ * directory change (e.g. when Xello Mind joined in §777).
+ *
+ * Still deliberately dependency-free: the fetch uses only HttpURLConnection +
+ * org.json on a background thread (exactly like com.example.ads.OdioBookAds), and
+ * the UI is pure Compose + Material3 theme colours (so it inherits each app's look
+ * automatically) + the bundled `odiobook_logo` drawable. No Retrofit, no Moshi, no
+ * Coil, no new Gradle deps. A bundled fallback list renders instantly before the
+ * live list loads and whenever the device is offline, so the section is never blank.
  *
  * @param currentAppTitle the host app's family title (e.g. "Early Rover") so its
  *        own card renders as "You're here" instead of a tappable link.
@@ -55,53 +70,129 @@ private data class FamilyApp(
     val url: String,
 )
 
-// The canonical family. Order = the public odiobook.com/apps directory.
-// Tapping any sibling opens the OdioBook apps hub (always-current store links
-// live there); OdioBook itself opens the main site.
-private val FAMILY_APPS = listOf(
-    FamilyApp(
-        "OdioBook",
-        "AI voice cloning, text-to-speech & studio",
-        Color(0xFF6D5EF6),
-        "https://odiobook.com",
-    ),
-    FamilyApp(
-        "Veda Drop",
-        "Women-only beauty & wellness booking",
-        Color(0xFF00AAAD),
-        "https://odiobook.com/apps",
-    ),
-    FamilyApp(
-        "Early Rover",
-        "Smart alarm, weather & travel wake-up",
-        Color(0xFFF5A623),
-        "https://odiobook.com/apps",
-    ),
-    FamilyApp(
-        "Dig Deep",
-        "Secure data shredder & recovery",
-        Color(0xFF10B981),
-        "https://odiobook.com/apps",
-    ),
-    FamilyApp(
-        "Xello Mind",
-        "Active-memory trainer with speech feedback",
-        Color(0xFF13B4A2),
-        "https://odiobook.com/apps",
-    ),
+private const val ODIOBOOK_HOME = "https://odiobook.com"
+private const val ODIOBOOK_APPS_HUB = "https://odiobook.com/apps"
+
+// OdioBook is the constant parent studio — always shown first, always points to
+// the main site. Only the sibling apps below it are fetched live.
+private val ODIOBOOK_ENTRY = FamilyApp(
+    "OdioBook",
+    "AI voice cloning, text-to-speech & studio",
+    Color(0xFF6D5EF6),
+    ODIOBOOK_HOME,
 )
 
-private const val ODIOBOOK_HOME = "https://odiobook.com"
+// Bundled fallback for the siblings — shown until the live directory loads and
+// whenever the device is offline. Mirrors the public odiobook.com/apps order.
+private val FALLBACK_SIBLINGS = listOf(
+    FamilyApp("Veda Drop", "Women-only beauty & wellness booking", Color(0xFF00AAAD), ODIOBOOK_APPS_HUB),
+    FamilyApp("Early Rover", "Smart alarm, weather & travel wake-up", Color(0xFFF5A623), ODIOBOOK_APPS_HUB),
+    FamilyApp("Dig Deep", "Secure data shredder & recovery", Color(0xFF10B981), ODIOBOOK_APPS_HUB),
+    FamilyApp("Xello Mind", "Active-memory trainer with speech feedback", Color(0xFF13B4A2), ODIOBOOK_APPS_HUB),
+)
+
+// Keep the established brand colours for the known apps; derive a stable, pleasant
+// accent for any NEW app the backend returns (so the monogram tile has colour
+// without the backend needing to store one).
+private val KNOWN_ACCENTS = mapOf(
+    "odiobook" to Color(0xFF6D5EF6),
+    "veda drop" to Color(0xFF00AAAD),
+    "early rover" to Color(0xFFF5A623),
+    "dig deep" to Color(0xFF10B981),
+    "xello mind" to Color(0xFF13B4A2),
+)
+private val ACCENT_PALETTE = listOf(
+    Color(0xFF6D5EF6), Color(0xFF00AAAD), Color(0xFFF5A623), Color(0xFF10B981),
+    Color(0xFF13B4A2), Color(0xFFEF6C75), Color(0xFF7C8DFF), Color(0xFFE8A13A),
+)
+
+private fun accentFor(title: String): Color {
+    val key = title.trim().lowercase()
+    KNOWN_ACCENTS[key]?.let { return it }
+    val size = ACCENT_PALETTE.size
+    val idx = ((key.hashCode() % size) + size) % size   // always non-negative
+    return ACCENT_PALETTE[idx]
+}
+
+/**
+ * Live OdioBook family directory. Fetches the sibling list ONCE per process on a
+ * background thread and exposes it as Compose snapshot state (so the rows refresh
+ * the moment it loads). Mirrors com.example.ads.OdioBookAds — dependency-free,
+ * fail-soft (any error leaves the bundled fallback in place).
+ */
+private object FamilyDirectory {
+    private const val URL_STR = "$ODIOBOOK_HOME/api/showcase/apps"
+    private val io = Executors.newSingleThreadExecutor()
+
+    @Volatile private var loading = false
+
+    // null = not loaded yet (caller shows the bundled fallback).
+    val state = mutableStateOf<List<FamilyApp>?>(null)
+
+    /** Kick off the fetch if it hasn't succeeded yet. Safe to call on every
+     *  recomposition: it no-ops once loaded or while a fetch is in flight, but a
+     *  FAILED attempt does NOT latch — reopening the section retries, so a device
+     *  that was offline at first open still picks up the live list on a later open. */
+    fun ensureLoaded() {
+        if (state.value != null || loading) return
+        loading = true
+        io.execute {
+            val result = runCatching { fetch() }.getOrNull()
+            if (result != null) state.value = result
+            loading = false
+        }
+    }
+
+    private fun fetch(): List<FamilyApp>? {
+        val conn = (URL(URL_STR).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 8000
+            readTimeout = 8000
+        }
+        try {
+            if (conn.responseCode != 200) return null
+            val text = conn.inputStream.bufferedReader().use { it.readText() }
+            val items = JSONObject(text).optJSONArray("items") ?: return null
+            val out = ArrayList<FamilyApp>(items.length())
+            for (i in 0 until items.length()) {
+                val o = items.optJSONObject(i) ?: continue
+                val title = if (o.isNull("title")) "" else o.optString("title", "").trim()
+                if (title.isEmpty()) continue
+                val tagline = if (o.isNull("tagline")) "" else o.optString("tagline", "").trim()
+                val store = if (o.isNull("store_url")) "" else o.optString("store_url", "").trim()
+                out.add(
+                    FamilyApp(
+                        title = title,
+                        tagline = tagline,
+                        accent = accentFor(title),
+                        url = if (store.isNotEmpty()) store else ODIOBOOK_APPS_HUB,
+                    )
+                )
+            }
+            // Empty payload (e.g. admin disabled the section) → keep the fallback.
+            return if (out.isEmpty()) null else out
+        } finally {
+            runCatching { conn.disconnect() }
+        }
+    }
+}
 
 @Composable
 fun OdioBookFamilySection(
     currentAppTitle: String,
     modifier: Modifier = Modifier,
 ) {
+    LaunchedEffect(Unit) { FamilyDirectory.ensureLoaded() }
+
     val uriHandler = LocalUriHandler.current
     val onSurface = MaterialTheme.colorScheme.onSurface
     val muted = onSurface.copy(alpha = 0.62f)
     val primary = MaterialTheme.colorScheme.primary
+
+    // OdioBook (the parent) is always first; the siblings come live from the
+    // backend, falling back to the bundled list before they load / when offline.
+    val siblings = FamilyDirectory.state.value ?: FALLBACK_SIBLINGS
+    val apps = listOf(ODIOBOOK_ENTRY) + siblings
 
     Column(modifier = modifier.fillMaxWidth()) {
         Text(
@@ -150,7 +241,7 @@ fun OdioBookFamilySection(
 
         Spacer(Modifier.height(14.dp))
 
-        FAMILY_APPS.forEach { app ->
+        apps.forEach { app ->
             FamilyAppRow(
                 app = app,
                 isCurrent = app.title.equals(currentAppTitle, ignoreCase = true),
