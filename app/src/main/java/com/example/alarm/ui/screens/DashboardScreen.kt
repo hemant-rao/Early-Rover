@@ -154,6 +154,9 @@ fun DashboardScreen(
     val isWeatherEnabled by viewModel.isWeatherEnabled.collectAsStateWithLifecycle()
     val isSolarTrendsEnabled by viewModel.isSolarTrendsEnabled.collectAsStateWithLifecycle()
     val isTravelEnabled by viewModel.isTravelEnabled.collectAsStateWithLifecycle()
+    // §806 — Early Rover group/family live tracking tab (gated on the geo `live_tracking` flag).
+    val isTrackingEnabled by viewModel.isTrackingEnabled.collectAsStateWithLifecycle()
+    val geoConfig by viewModel.geoConfig.collectAsStateWithLifecycle()
 
     // Shared OFF-toggle handler: repeating alarms prompt skip-vs-turn-off; one-time alarms toggle directly.
     val onAlarmToggle: (Alarm) -> Unit = { alarm ->
@@ -410,6 +413,36 @@ fun DashboardScreen(
                         }
                     }
  
+                    // §806 — ROVER Tab (group/family live tracking)
+                    if (isTrackingEnabled) {
+                        Box(
+                            modifier = tabModifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { activeTab = 4 }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Groups,
+                                    contentDescription = "Rover",
+                                    tint = if (activeTab == 4) SleekPrimary else SleekMutedText.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = viewModel.translate("ROVER"),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (activeTab == 4) SleekPrimary else SleekMutedText.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
+                    }
+
                     // 4. SETTINGS Tab
                     Box(
                         modifier = tabModifier
@@ -941,6 +974,21 @@ fun DashboardScreen(
                             .padding(top = innerPadding.calculateTopPadding())
                     ) {
                         TravelAlarmScreen(viewModel = viewModel)
+                    }
+                }
+
+                4 -> { // §806 — ROVER (group/family live tracking)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = innerPadding.calculateTopPadding())
+                    ) {
+                        com.example.alarm.tracking.GroupTrackingScreen(
+                            geoConfig = geoConfig,
+                            deviceLat = lat,
+                            deviceLon = lng,
+                            translate = { s -> viewModel.translate(s) }
+                        )
                     }
                 }
             }

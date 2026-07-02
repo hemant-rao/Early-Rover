@@ -5,6 +5,10 @@
     <!-- Location permissions -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- §806 — background location so the group/family live-share (EarlyRoverShareService)
+         keeps reporting when the app is not in the foreground. Requested at runtime only
+         when the user turns Sharing ON (Life360-style consent). -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- Wake and notification notifications -->
@@ -74,6 +78,12 @@
         <!-- Intelligent continuous travel tracking location service -->
         <service
             android:name=".alarm.location.TravelTrackingService"
+            android:foregroundServiceType="location"
+            android:exported="false" />
+
+        <!-- §806 — Early Rover live group/family location sharing foreground service. -->
+        <service
+            android:name=".alarm.tracking.EarlyRoverShareService"
             android:foregroundServiceType="location"
             android:exported="false" />
 

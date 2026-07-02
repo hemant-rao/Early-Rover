@@ -185,6 +185,12 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     private val _isLocationEnabled = MutableStateFlow(settingsPrefs.getBoolean(FEATURE_LOCATION, true))
     val isLocationEnabled: StateFlow<Boolean> = _isLocationEnabled.asStateFlow()
 
+    // §806 — Early Rover group/family live tracking tab. Gated on the geo gateway's
+    // resolved `live_tracking` flag (admin-controlled per app). Defaults OFF until the
+    // remote config confirms it's ON, so the tab doesn't flash before the backend answers.
+    private val _isTrackingEnabled = MutableStateFlow(false)
+    val isTrackingEnabled: StateFlow<Boolean> = _isTrackingEnabled.asStateFlow()
+
     // §689 — OdioBook geo gateway. The app no longer holds the Ola Maps REST key:
     // ALL location + weather traffic is proxied through the OdioBook backend, which
     // injects the admin-managed key server-side. The only thing configurable here
@@ -214,7 +220,11 @@ class AlarmViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshGeoConfig() {
         viewModelScope.launch(Dispatchers.IO) {
             val cfg = OlaMapsRepository.appConfig()
-            if (cfg != null) _geoConfig.value = cfg
+            if (cfg != null) {
+                _geoConfig.value = cfg
+                // §806 — surface the resolved live-tracking gate for the Rover tab.
+                _isTrackingEnabled.value = cfg.features["live_tracking"] ?: false
+            }
         }
     }
 
