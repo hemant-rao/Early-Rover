@@ -1002,8 +1002,18 @@ fun AdvancedTab(viewModel: AlarmViewModel, onNavigateToPrivacyPolicy: () -> Unit
                     letterSpacing = 2.sp
                 )
                 Spacer(modifier = Modifier.height(6.dp))
+                // §812 — real installed version (was a hardcoded "1.0.0 (Concept
+                // Edition)" stub that never tracked the actual build).
+                val aboutContext = LocalContext.current
+                val aboutVersion = remember {
+                    try {
+                        aboutContext.packageManager.getPackageInfo(aboutContext.packageName, 0).versionName ?: "1.0"
+                    } catch (e: Exception) {
+                        "1.0"
+                    }
+                }
                 Text(
-                    text = viewModel.translate("Version 1.0.0 (Concept Edition)"),
+                    text = viewModel.translate("Version") + " " + aboutVersion,
                     fontSize = 11.sp,
                     color = SleekMutedText
                 )

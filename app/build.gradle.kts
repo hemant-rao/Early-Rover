@@ -12,10 +12,13 @@ android {
 
   defaultConfig {
     applicationId = "com.aistudio.sunalarm.pzhkrm2"
-    minSdk = 24
+    // §812 — raised 24→26: the legacy pre-adaptive mipmap-*dpi launcher webps were
+    // binary-corrupted in git history (unrecoverable) so they were deleted; the
+    // adaptive icon (mipmap-anydpi-v26, vector foreground) covers API 26+.
+    minSdk = 26
     targetSdk = 35
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2
+    versionName = "1.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

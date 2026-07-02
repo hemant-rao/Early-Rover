@@ -91,7 +91,7 @@ private val ODIOBOOK_ENTRY = FamilyApp(
 private val FALLBACK_SIBLINGS = listOf(
     FamilyApp("Veda Drop", "Women-only beauty & wellness booking", Color(0xFF00AAAD), ODIOBOOK_APPS_HUB),
     FamilyApp("Early Rover", "Smart alarm, weather & travel wake-up", Color(0xFFF5A623), ODIOBOOK_APPS_HUB),
-    FamilyApp("Dig Deep", "Secure data shredder & recovery", Color(0xFF10B981), ODIOBOOK_APPS_HUB),
+    FamilyApp("Traces Wiper", "Secure file shredder & trace cleaner", Color(0xFF10B981), ODIOBOOK_APPS_HUB),
     FamilyApp("Xello Mind", "Active-memory trainer with speech feedback", Color(0xFF13B4A2), ODIOBOOK_APPS_HUB),
     FamilyApp("DailyFoodServe", "Fresh home-style meals, served daily", Color(0xFF055160), DAILYFOODSERVE_URL),
 )
@@ -103,7 +103,8 @@ private val KNOWN_ACCENTS = mapOf(
     "odiobook" to Color(0xFF6D5EF6),
     "veda drop" to Color(0xFF00AAAD),
     "early rover" to Color(0xFFF5A623),
-    "dig deep" to Color(0xFF10B981),
+    "traces wiper" to Color(0xFF10B981),
+    "dig deep" to Color(0xFF10B981),   // legacy title alias (pre-§812 backend rows)
     "xello mind" to Color(0xFF13B4A2),
     "dailyfoodserve" to Color(0xFF055160),
 )

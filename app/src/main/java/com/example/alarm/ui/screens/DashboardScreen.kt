@@ -30,6 +30,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -2245,23 +2246,25 @@ fun WeatherDaysList(
     }
 }
 
-/** Maps a European AQI value to a qualitative label + accent color. */
-private fun europeanAqiQuality(aqi: Int): Pair<String, Color> = when {
-    aqi <= 20 -> "Good" to Color(0xFF22C55E)
-    aqi <= 40 -> "Fair" to Color(0xFF84CC16)
-    aqi <= 60 -> "Moderate" to Color(0xFFFBBF24)
-    aqi <= 80 -> "Poor" to Color(0xFFF97316)
-    aqi <= 100 -> "Very Poor" to Color(0xFFEF4444)
+/** Maps a European AQI value to a qualitative label + accent color.
+ *  §812 — `dark=false` picks deeper variants so the label stays readable as text
+ *  on the near-white light-theme card (lime/amber on white failed contrast). */
+private fun europeanAqiQuality(aqi: Int, dark: Boolean): Pair<String, Color> = when {
+    aqi <= 20 -> "Good" to if (dark) Color(0xFF22C55E) else Color(0xFF15803D)
+    aqi <= 40 -> "Fair" to if (dark) Color(0xFF84CC16) else Color(0xFF4D7C0F)
+    aqi <= 60 -> "Moderate" to if (dark) Color(0xFFFBBF24) else Color(0xFFB45309)
+    aqi <= 80 -> "Poor" to if (dark) Color(0xFFF97316) else Color(0xFFC2410C)
+    aqi <= 100 -> "Very Poor" to if (dark) Color(0xFFEF4444) else Color(0xFFDC2626)
     else -> "Extremely Poor" to Color(0xFF991B1B)
 }
 
 /** Maps a US AQI value to a qualitative label + accent color using the EPA 0-500 scale. */
-private fun usAqiQuality(aqi: Int): Pair<String, Color> = when {
-    aqi <= 50 -> "Good" to Color(0xFF22C55E)
-    aqi <= 100 -> "Moderate" to Color(0xFFFBBF24)
-    aqi <= 150 -> "Unhealthy for Sensitive Groups" to Color(0xFFF97316)
-    aqi <= 200 -> "Unhealthy" to Color(0xFFEF4444)
-    aqi <= 300 -> "Very Unhealthy" to Color(0xFF8B5CF6)
+private fun usAqiQuality(aqi: Int, dark: Boolean): Pair<String, Color> = when {
+    aqi <= 50 -> "Good" to if (dark) Color(0xFF22C55E) else Color(0xFF15803D)
+    aqi <= 100 -> "Moderate" to if (dark) Color(0xFFFBBF24) else Color(0xFFB45309)
+    aqi <= 150 -> "Unhealthy for Sensitive Groups" to if (dark) Color(0xFFF97316) else Color(0xFFC2410C)
+    aqi <= 200 -> "Unhealthy" to if (dark) Color(0xFFEF4444) else Color(0xFFDC2626)
+    aqi <= 300 -> "Very Unhealthy" to if (dark) Color(0xFF8B5CF6) else Color(0xFF7C3AED)
     else -> "Hazardous" to Color(0xFF7F1D1D)
 }
 
@@ -2271,14 +2274,17 @@ fun AirQualityCard(
     viewModel: AlarmViewModel
 ) {
     val lang = viewModel.currentLanguage.collectAsStateWithLifecycle().value
+    // §812 — resolve the ACTIVE theme (user-set LIGHT/DARK/AUTO, not just the
+    // system) from the applied background luminance so AQI accents stay readable.
+    val isDarkCard = MaterialTheme.colorScheme.background.luminance() < 0.5f
     // Prefer European AQI; fall back to US AQI. -1 means unavailable for both.
     val useEuropean = aqi.europeanAqi >= 0
     val displayValue = if (useEuropean) aqi.europeanAqi else aqi.usAqi
     val (qualityLabel, accent) = if (useEuropean) {
-        europeanAqiQuality(aqi.europeanAqi)
+        europeanAqiQuality(aqi.europeanAqi, isDarkCard)
     } else {
         // US AQI uses the EPA 0-500 scale with its own bands.
-        usAqiQuality(aqi.usAqi)
+        usAqiQuality(aqi.usAqi, isDarkCard)
     }
 
     Card(
@@ -2406,23 +2412,28 @@ fun WeatherParamLabelValue(
 
 @Composable
 fun getWeatherIconAndColor(condition: com.example.alarm.weather.WeatherCondition, isDay: Boolean): Pair<androidx.compose.ui.graphics.vector.ImageVector, Color> {
+    // §812 — the pale tints (near-white cloud/fog/snow, light blues) vanished on
+    // the light theme's white cards. Resolve the ACTIVE theme from the applied
+    // background luminance and use deeper variants in light mode.
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val nightBlue = if (dark) Color(0xFF90CAF9) else Color(0xFF2563EB)
     return when (condition) {
         com.example.alarm.weather.WeatherCondition.CLEAR -> {
-            if (isDay) Icons.Default.WbSunny to Color(0xFFFFB347)
-            else Icons.Default.NightsStay to Color(0xFF90CAF9)
+            if (isDay) Icons.Default.WbSunny to (if (dark) Color(0xFFFFB347) else Color(0xFFD97706))
+            else Icons.Default.NightsStay to nightBlue
         }
         com.example.alarm.weather.WeatherCondition.FEW_CLOUDS -> {
-            if (isDay) Icons.Default.Cloud to Color(0xFFE2E8F0)
-            else Icons.Default.NightsStay to Color(0xFF90CAF9)
+            if (isDay) Icons.Default.Cloud to (if (dark) Color(0xFFE2E8F0) else Color(0xFF64748B))
+            else Icons.Default.NightsStay to nightBlue
         }
-        com.example.alarm.weather.WeatherCondition.CLOUDS -> Icons.Default.Cloud to Color(0xFF94A3B8)
-        com.example.alarm.weather.WeatherCondition.FOG -> Icons.Default.Menu to Color(0xFFA5F3FC)
-        com.example.alarm.weather.WeatherCondition.RAIN -> Icons.Default.InvertColors to Color(0xFF60A5FA)
+        com.example.alarm.weather.WeatherCondition.CLOUDS -> Icons.Default.Cloud to (if (dark) Color(0xFF94A3B8) else Color(0xFF64748B))
+        com.example.alarm.weather.WeatherCondition.FOG -> Icons.Default.Menu to (if (dark) Color(0xFFA5F3FC) else Color(0xFF0891B2))
+        com.example.alarm.weather.WeatherCondition.RAIN -> Icons.Default.InvertColors to (if (dark) Color(0xFF60A5FA) else Color(0xFF2563EB))
         com.example.alarm.weather.WeatherCondition.SNOW -> {
-            if (isDay) Icons.Default.Star to Color(0xFFE2E8F0)
-            else Icons.Default.NightsStay to Color(0xFF90CAF9)
+            if (isDay) Icons.Default.Star to (if (dark) Color(0xFFE2E8F0) else Color(0xFF64748B))
+            else Icons.Default.NightsStay to nightBlue
         }
-        com.example.alarm.weather.WeatherCondition.THUNDER -> Icons.Default.FlashOn to Color(0xFFFBBF24)
+        com.example.alarm.weather.WeatherCondition.THUNDER -> Icons.Default.FlashOn to (if (dark) Color(0xFFFBBF24) else Color(0xFFB45309))
     }
 }
 
