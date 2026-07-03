@@ -92,6 +92,25 @@ object OlaMapsRepository {
         return "$base/tiles/vector/v1/styles/$style/style.json?api_key=$tileKey"
     }
 
+    /** §692 — key-less MapLibre style (OpenFreeMap). Fallback when app-config is unreachable. */
+    const val DEFAULT_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
+
+    /**
+     * Resolve the style URL a MapLibre view should render, across both backend
+     * generations: prefer the key-less `tile_style_url` (§692, the ONLY thing prod
+     * serves now), fall back to the legacy Ola tile_key style if an old server
+     * still hands one out, else the public default so the map ALWAYS renders.
+     * (Pre-fix the Rover map gated on tile_key — blank since §692 — so it showed
+     * "Map unavailable" forever.)
+     */
+    fun resolveStyleUrl(config: com.example.alarm.maps.GeoAppConfigDto?, dark: Boolean): String {
+        val styleUrl = config?.tileStyleUrl?.trim().orEmpty()
+        if (styleUrl.isNotBlank()) return styleUrl
+        val key = config?.tileKey?.trim().orEmpty()
+        if (key.isNotBlank()) return styleUrl(key, dark, config?.baseUrl?.ifBlank { null } ?: DEFAULT_TILE_BASE)
+        return DEFAULT_STYLE_URL
+    }
+
     /** Fetch the remote feature/config for this app. Null on any failure. */
     suspend fun appConfig(): GeoAppConfigDto? = withContext(Dispatchers.IO) {
         try {

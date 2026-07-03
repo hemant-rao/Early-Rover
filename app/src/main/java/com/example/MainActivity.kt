@@ -401,6 +401,7 @@ class MainActivity : ComponentActivity() {
         "weather" -> 1
         "settings" -> 2
         "travel" -> 3
+        "rover" -> 4    // §817 — Early Rover live-sharing notification lands on its tab
         else -> null
     }
 }

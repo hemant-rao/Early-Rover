@@ -92,13 +92,16 @@ fun OlaMapView(
     to: GeoPoint? = null,
     route: List<GeoPoint>? = null,
     isDark: Boolean = isSystemInDarkTheme(),
-    followCurrent: Boolean = false
+    followCurrent: Boolean = false,
+    // §817 — key-less MapLibre style URL (§692 tile_style_url). When set it wins
+    // over the legacy Ola tileKey style; pass OlaMapsRepository.resolveStyleUrl(...).
+    styleUrl: String? = null
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val context = LocalContext.current
 
     val mapView = remember {
-        ensureOlaHttp(tileKey)
+        if (tileKey.isNotBlank()) ensureOlaHttp(tileKey)
         MapLibre.getInstance(context.applicationContext)
         val options = MapLibreMapOptions()
             .textureMode(true)               // texture surface -> allows transparency
@@ -136,7 +139,9 @@ fun OlaMapView(
         factory = { _ ->
             mapView.getMapAsync { map ->
                 mapRef.value = map
-                map.setStyle(Style.Builder().fromUri(OlaMapsRepository.styleUrl(tileKey, isDark, tileBaseUrl))) { style ->
+                val uri = styleUrl?.ifBlank { null }
+                    ?: OlaMapsRepository.styleUrl(tileKey, isDark, tileBaseUrl)
+                map.setStyle(Style.Builder().fromUri(uri)) { style ->
                     styleRef.value = style
                     initLayers(style)
                     applyData(map, style, current, from, to, route, followCurrent, firstFit = true)

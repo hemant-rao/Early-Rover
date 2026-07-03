@@ -45,6 +45,10 @@ class TrackingViewModel(app: Application) : AndroidViewModel(app) {
     private val _status = MutableStateFlow<String?>(null)
     val status: StateFlow<String?> = _status.asStateFlow()
 
+    // §817 — pull-to-refresh spinner state.
+    private val _refreshing = MutableStateFlow(false)
+    val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
+
     val socketConnected: StateFlow<Boolean> = TrackingBus.socket.connected
     val isSharing: StateFlow<Boolean> = EarlyRoverShareService.isSharing
 
@@ -76,9 +80,16 @@ class TrackingViewModel(app: Application) : AndroidViewModel(app) {
         TrackingBus.release()
     }
 
-    fun refreshAll() {
+    fun refreshAll(showSpinner: Boolean = false) {
         viewModelScope.launch {
+            if (showSpinner) _refreshing.value = true
             try {
+                // §817 — a fresh install may reach here before the init{} registration
+                // finished (or after it failed offline); re-arm identity so the pull-to-
+                // refresh gesture can self-heal instead of 401-looping.
+                if (_me.value == null) {
+                    _me.value = TrackingRepository.ensureRegistered(TrackingPrefs.displayName())
+                }
                 val c = TrackingRepository.connections()
                 _connections.value = c.connections
                 _meLocation.value = c.meLocation
@@ -87,6 +98,9 @@ class TrackingViewModel(app: Application) : AndroidViewModel(app) {
                 _sos.value = TrackingRepository.sos().events
             } catch (e: Exception) {
                 Log.w(TAG, "refreshAll failed: ${e.message}")
+                if (showSpinner) _status.value = "Couldn't refresh. Check your internet."
+            } finally {
+                if (showSpinner) _refreshing.value = false
             }
         }
     }
@@ -139,8 +153,17 @@ class TrackingViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { TrackingRepository.removeConnection(id) }; refreshAll()
     }
 
-    fun createCircle(name: String) = viewModelScope.launch {
-        runCatching { TrackingRepository.createCircle(name, null) }; refreshAll()
+    /** §817 — returns the fresh circle via [onResult] so the UI can surface the invite code. */
+    fun createCircle(name: String, onResult: (CircleDto?, String?) -> Unit = { _, _ -> }) = viewModelScope.launch {
+        try {
+            val circle = TrackingRepository.createCircle(name, null).circle
+            refreshAll()
+            onResult(circle, null)
+        } catch (e: Exception) { onResult(null, apiError(e)) }
+    }
+
+    fun removeMember(circleId: Int, userId: Int) = viewModelScope.launch {
+        runCatching { TrackingRepository.removeMember(circleId, userId) }; refreshAll()
     }
 
     fun joinCircle(code: String, onResult: (Boolean, String) -> Unit) = viewModelScope.launch {
@@ -184,6 +207,13 @@ class TrackingViewModel(app: Application) : AndroidViewModel(app) {
     fun setGhost(on: Boolean) = viewModelScope.launch {
         runCatching { _me.value = TrackingRepository.patchMe(MePatchReq(ghost = on)) }
     }
+
+    fun setSharePrecise(on: Boolean) = viewModelScope.launch {
+        runCatching { _me.value = TrackingRepository.patchMe(MePatchReq(sharePrecise = on)) }
+    }
+
+    /** §817 — status line helper so screen actions can toast through the same strip. */
+    fun postStatus(msg: String) { _status.value = msg }
 
     fun startSharing() = EarlyRoverShareService.start(getApplication())
     fun stopSharing() = EarlyRoverShareService.stop(getApplication())

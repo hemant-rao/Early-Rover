@@ -48,6 +48,11 @@ class EarlyRoverShareService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var stopped = false
 
+    // §817 — client-side send pacing (battery + server load).
+    @Volatile private var lastSentAt = 0L
+    @Volatile private var lastSentLat: Double? = null
+    @Volatile private var lastSentLon: Double? = null
+
     companion object {
         private const val TAG = "EarlyRoverShare"
         const val CHANNEL_ID = "EARLY_ROVER_SHARE_CHANNEL"
@@ -109,16 +114,35 @@ class EarlyRoverShareService : Service() {
             Log.e(TAG, "no location permission")
             return
         }
-        // Balanced power; deliver ~every 12s, batch up to 30s to save battery.
+        // Balanced power; deliver ~every 12s, batch up to 45s to save battery.
         val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 12_000L)
             .setMinUpdateIntervalMillis(8_000L)
-            .setMaxUpdateDelayMillis(30_000L)
+            .setMaxUpdateDelayMillis(45_000L)
+            .setMinUpdateDistanceMeters(10f)   // §817 — stationary phone: no GPS-driven callbacks at all
             .setWaitForAccurateLocation(false)
             .build()
         callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 if (stopped) return
                 val loc = result.lastLocation ?: return
+                // §817 battery/network pacing — mirror the web client (§810): while
+                // stationary (<10 m since the last SENT fix) relay only a ~45s
+                // keepalive so peers' freshness stays honest; while moving relay at
+                // most every ~5s. Radio wakeups are the battery cost, not the fix.
+                val now = System.currentTimeMillis()
+                val moved = lastSentLat?.let { la ->
+                    lastSentLon?.let { lo ->
+                        val r = FloatArray(1)
+                        android.location.Location.distanceBetween(la, lo, loc.latitude, loc.longitude, r)
+                        r[0].toDouble()
+                    }
+                } ?: Double.MAX_VALUE
+                val since = now - lastSentAt
+                if (since < 5_000L) return
+                if (moved < 10.0 && since < 45_000L) return
+                lastSentAt = now
+                lastSentLat = loc.latitude
+                lastSentLon = loc.longitude
                 relay(loc.latitude, loc.longitude,
                     if (loc.hasBearing()) loc.bearing.toDouble() else null,
                     if (loc.hasSpeed()) loc.speed.toDouble() else null,
@@ -194,8 +218,14 @@ class EarlyRoverShareService : Service() {
     }
 
     private fun buildNotification(): Notification {
+        // Land on the ROVER tab (not the default dash) when the user taps the
+        // "Sharing your location" notification — same NAV_DESTINATION contract as
+        // the travel-tracking notification.
         val open = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
+            this, 0, Intent(this, MainActivity::class.java).apply {
+                putExtra("NAV_DESTINATION", "rover")
+                addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(
             this, 1, Intent(this, EarlyRoverShareService::class.java).apply { action = ACTION_STOP },

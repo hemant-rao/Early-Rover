@@ -33,6 +33,9 @@ data class GeoAppConfigDto(
     @Json(name = "tile_key") val tileKey: String? = null,
     // Ola tiles base (e.g. https://api.olamaps.io) for building the style URL.
     @Json(name = "base_url") val baseUrl: String? = null,
+    // §692 — key-less MapLibre style URL (OpenFreeMap by default). When present this
+    // is THE way to render tiles; the Ola tile_key above is legacy and now blank.
+    @Json(name = "tile_style_url") val tileStyleUrl: String? = null,
     // Resolved feature flags (already AND-ed with provider availability + app gate).
     @Json(name = "features") val features: Map<String, Boolean> = emptyMap()
 )

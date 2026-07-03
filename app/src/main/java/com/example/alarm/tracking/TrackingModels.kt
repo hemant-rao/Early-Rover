@@ -94,7 +94,10 @@ data class CircleMember(
     @Json(name = "display_name") val displayName: String? = null,
     @Json(name = "rover_id") val roverId: String? = null,
     val color: String? = null,
-    val role: String = "member"
+    val role: String = "member",
+    // §810 — privacy-gated last-known location (null when the member hides from me).
+    // Lets a whole family circle land on the map without pairwise connections.
+    val location: LocationDto? = null
 )
 
 @JsonClass(generateAdapter = true)

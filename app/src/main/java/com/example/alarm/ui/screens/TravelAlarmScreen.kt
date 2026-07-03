@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -96,7 +97,12 @@ fun TravelAlarmScreen(
     val mapsOn = geoConfig?.mapsEnabled == true
     val tileKey = geoConfig?.tileKey ?: ""
     val tileBaseUrl = geoConfig?.baseUrl ?: com.example.alarm.maps.OlaMapsRepository.DEFAULT_TILE_BASE
-    val mapReady = mapsOn && tileKey.isNotBlank()
+    // §817 — §692 servers stopped issuing tile_key (key-less tile_style_url instead),
+    // which left mapReady permanently false and the live map hidden. The resolver
+    // always yields a renderable style now.
+    val mapStyleUrl = com.example.alarm.maps.OlaMapsRepository.resolveStyleUrl(
+        geoConfig, isSystemInDarkTheme())
+    val mapReady = mapsOn
     fun geoFeat(key: String): Boolean = geoConfig?.features?.get(key) ?: true
 
     // Decoded route (FROM -> TO) for the map, fetched via the geo gateway.
@@ -625,6 +631,7 @@ fun TravelAlarmScreen(
                                 com.example.alarm.maps.OlaMapView(
                                     tileKey = tileKey,
                                     tileBaseUrl = tileBaseUrl,
+                                    styleUrl = mapStyleUrl,
                                     modifier = Modifier.fillMaxSize(),
                                     current = mapCurrent,
                                     from = mapFrom,
