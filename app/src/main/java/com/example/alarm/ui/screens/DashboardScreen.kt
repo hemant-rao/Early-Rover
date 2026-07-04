@@ -979,10 +979,16 @@ fun DashboardScreen(
                 }
 
                 4 -> { // §806 — ROVER (group/family live tracking)
+                    // §820 full-screen map: also consume the BOTTOM inset so the
+                    // map (and its floating controls) end at the nav bar instead
+                    // of running underneath it.
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(top = innerPadding.calculateTopPadding())
+                            .padding(
+                                top = innerPadding.calculateTopPadding(),
+                                bottom = innerPadding.calculateBottomPadding()
+                            )
                     ) {
                         com.example.alarm.tracking.GroupTrackingScreen(
                             geoConfig = geoConfig,

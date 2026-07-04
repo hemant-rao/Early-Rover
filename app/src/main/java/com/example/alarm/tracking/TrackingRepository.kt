@@ -94,6 +94,8 @@ object TrackingRepository {
     suspend fun respond(id: Int, accept: Boolean): OkResp = io { api().respondConnection(id, RespondReq(accept)) }
     suspend fun pause(id: Int, on: Boolean): ConnectionResp = io { api().pauseConnection(id, PauseReq(on)) }
     suspend fun removeConnection(id: Int): OkResp = io { api().deleteConnection(id) }
+    /** §820 — conditional cancel of MY pending request (409 if already accepted). */
+    suspend fun cancelRequest(id: Int): OkResp = io { api().deleteConnection(id, "pending") }
 
     suspend fun circles(): CirclesResp = io { api().circles() }
     suspend fun createCircle(name: String, color: String?): CircleResp = io { api().createCircle(CircleReq(name, color)) }

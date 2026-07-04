@@ -63,6 +63,9 @@ data class ConnectionDto(
     val status: String = "pending",
     val incoming: Boolean = false,
     val outgoing: Boolean = false,
+    // §818/§820 — request direction survives acceptance ("You added them" /
+    // "They added you"); null on old payloads → UI omits the line.
+    @Json(name = "added_by_me") val addedByMe: Boolean? = null,
     @Json(name = "paused_by_me") val pausedByMe: Boolean = false,
     @Json(name = "paused_by_peer") val pausedByPeer: Boolean = false,
     val peer: PublicUser? = null,
@@ -148,7 +151,12 @@ data class SosDto(
 )
 
 @JsonClass(generateAdapter = true)
-data class SosListResp(val events: List<SosDto> = emptyList())
+data class SosListResp(
+    val events: List<SosDto> = emptyList(),
+    // §820 — MY own active SOS (events excludes self server-side); rehydrates the
+    // "SOS active — Resolve" FAB across app restarts.
+    val mine: SosDto? = null
+)
 
 @JsonClass(generateAdapter = true)
 data class SosResp(val sos: SosDto = SosDto())

@@ -6,6 +6,7 @@ import retrofit2.http.GET
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
+import retrofit2.http.Query
 
 /**
  * §806 — Early Rover tracking REST endpoints (base {server}/, e.g.
@@ -35,8 +36,11 @@ interface TrackingApi {
     @POST("api/earlyrover/v1/connections/{id}/pause")
     suspend fun pauseConnection(@Path("id") id: Int, @Body body: PauseReq): ConnectionResp
 
+    // §820 — expect="pending" makes the delete conditional: a cancel racing the
+    // peer's accept 409s (NOT_PENDING) instead of destroying the new connection.
     @DELETE("api/earlyrover/v1/connections/{id}")
-    suspend fun deleteConnection(@Path("id") id: Int): OkResp
+    suspend fun deleteConnection(@Path("id") id: Int,
+                                 @Query("expect") expect: String? = null): OkResp
 
     @GET("api/earlyrover/v1/circles")
     suspend fun circles(): CirclesResp

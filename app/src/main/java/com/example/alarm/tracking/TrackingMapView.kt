@@ -34,8 +34,11 @@ import org.maplibre.geojson.Point
 /** One person to plot on the tracking map. */
 data class PeerPoint(val id: Int, val point: GeoPoint, val color: String, val ghost: Boolean = false)
 
-/** Camera focus request — [seq] bumps per tap so re-focusing the SAME person re-centers. */
-data class MapFocus(val point: GeoPoint, val seq: Long, val peerId: Int? = null)
+/** Camera focus request — [seq] bumps per tap so re-focusing the SAME person re-centers.
+ *  §820: [zoom] lets callers pick the fly-to zoom (country-level first-run fallback vs
+ *  street-level person focus). */
+data class MapFocus(val point: GeoPoint, val seq: Long, val peerId: Int? = null,
+                    val zoom: Double = 15.5, val ring: Boolean = true)
 
 private const val SRC_PEERS = "er-peers-src"
 private const val LYR_PEERS_HALO = "er-peers-halo"
@@ -81,7 +84,12 @@ fun TrackingMapView(
 
     val mapView = remember {
         MapLibre.getInstance(context.applicationContext)
-        MapView(context)
+        // §820 — TextureView instead of the default SurfaceView: the Dashboard's
+        // Crossfade tab transition alpha-fades, which a SurfaceView ignores (the
+        // full-screen map would pop/flash black on every tab switch). Texture
+        // mode composites like a normal view and behaves better on weak GPUs.
+        MapView(context, org.maplibre.android.maps.MapLibreMapOptions
+            .createFromAttributes(context).textureMode(true))
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -213,7 +221,10 @@ private fun applyData(
 
     // Focus ring follows the focused peer's LIVE position (falls back to the tapped
     // point); the link line ties it to "me" so the between-us distance reads visually.
-    val focusedLive = focus?.peerId?.let { id -> peers.firstOrNull { it.id == id }?.point } ?: focus?.point
+    // §820: ring=false (recenter-on-me, first-run fallback) suppresses ring + link —
+    // a camera move only, no "target" affordance on yourself or an arbitrary point.
+    val focusedLive = if (focus?.ring == false) null
+        else focus?.peerId?.let { id -> peers.firstOrNull { it.id == id }?.point } ?: focus?.point
     (style.getSource(SRC_FOCUS) as? GeoJsonSource)?.setGeoJson(pointFc(focusedLive))
     val link = if (focusedLive != null && me != null) {
         FeatureCollection.fromFeature(Feature.fromGeometry(LineString.fromLngLats(listOf(
@@ -229,7 +240,7 @@ private fun applyData(
         didFit.value = true   // an explicit focus supersedes the initial auto-fit
         val target = focusedLive ?: focus.point
         map.animateCamera(CameraUpdateFactory.newLatLngZoom(
-            LatLng(target.latitude, target.longitude), 15.5), 900)
+            LatLng(target.latitude, target.longitude), focus.zoom), 900)
         return
     }
 

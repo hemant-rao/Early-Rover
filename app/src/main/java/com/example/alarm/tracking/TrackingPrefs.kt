@@ -18,6 +18,7 @@ object TrackingPrefs {
     private const val K_ROVER_ID = "er_rover_id"
     private const val K_NAME = "er_display_name"
     private const val K_DEVICE_SECRET = "er_device_secret"
+    private const val K_SHARE_DISCLOSURE = "er_share_disclosure_shown"
 
     @Volatile private var appContext: Context? = null
 
@@ -54,6 +55,13 @@ object TrackingPrefs {
 
     fun setDisplayName(name: String?) {
         sp()?.edit()?.putString(K_NAME, name)?.apply()
+    }
+
+    // §820 — one-time pre-permission disclosure ("shares your live location…"),
+    // required before the runtime location prompt (Play policy).
+    fun sharingDisclosureShown(): Boolean = sp()?.getBoolean(K_SHARE_DISCLOSURE, false) ?: false
+    fun setSharingDisclosureShown() {
+        sp()?.edit()?.putBoolean(K_SHARE_DISCLOSURE, true)?.apply()
     }
 
     /** A stable per-install secret; generated once. */
