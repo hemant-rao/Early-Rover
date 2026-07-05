@@ -227,6 +227,7 @@ class TrackingViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             "sos" -> refreshAll()          // banner derives from _sos — never a toast
+            "sos_resolved" -> refreshAll() // §821 — clear the banner live, not on next poll
             "place_alert" -> {
                 val who = o.optString("name").ifBlank { "A connection" }
                 val ev = o.optString("event")
